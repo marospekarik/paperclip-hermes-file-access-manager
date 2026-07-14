@@ -1,7 +1,7 @@
 import type {
   PluginManifest,
   PluginUiSlotDeclaration,
-} from "../paperclip-types.js";
+} from "./paperclip-types.js";
 
 export const manifest: PluginManifest = {
   id: "ordillect.file-access-manager",

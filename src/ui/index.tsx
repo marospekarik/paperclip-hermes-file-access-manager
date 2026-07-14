@@ -198,7 +198,7 @@ const FileAccessEditor: React.FC<{
       <ul className="fac-path-list">
         {Object.entries(paths).map(([p, s]) => (
           <li key={p}>
-            {p} => <span className={`fac-state ${stateClass(s)}`}>{stateLabel(s)}</span>
+            {p} {'=>'} <span className={`fac-state ${stateClass(s)}`}>{stateLabel(s)}</span>
             <button onClick={() => setPathState(p, undefined)}>Remove</button>
           </li>
         ))}
