@@ -1,0 +1,29 @@
+{
+  "name": "@ordillect/file-access-manager",
+  "version": "0.1.0",
+  "description": "Paperclip UI plugin for managing Hermes file_access permissions per agent",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/worker.js",
+  "scripts": {
+    "build": "bun run build.ts",
+    "dev": "bun run build.ts --watch",
+    "typecheck": "bun tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/js-yaml": "^4.0.9",
+    "@types/react": "^18.3.0",
+    "typescript": "^5.7.0"
+  },
+  "peerDependencies": {
+    "react": "^18.3.0"
+  },
+  "paperclipPlugin": {
+    "manifest": "dist/manifest.js"
+  }
+}
