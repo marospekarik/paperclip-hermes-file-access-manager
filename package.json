@@ -1,22 +1,20 @@
 {
   "name": "@ordillect/file-access-manager",
-  "version": "0.1.0",
-  "description": "Paperclip UI plugin for managing Hermes file_access permissions per agent",
+  "version": "0.2.0",
+  "description": "Paperclip plugin that manages the Hermes write sandbox (HERMES_WRITE_SAFE_ROOT) per agent",
   "license": "MIT",
   "type": "module",
-  "main": "dist/worker.js",
   "scripts": {
-    "build": "bun run build.ts",
-    "dev": "bun run build.ts --watch",
-    "typecheck": "bun tsc --noEmit",
+    "build": "NODE_ENV=production bun run build.ts",
+    "typecheck": "bunx tsc --noEmit",
+    "test": "bun test",
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "js-yaml": "^4.1.0"
+    "@paperclipai/plugin-sdk": "2026.609.0"
   },
   "devDependencies": {
     "@types/bun": "latest",
-    "@types/js-yaml": "^4.0.9",
     "@types/react": "^18.3.0",
     "typescript": "^5.7.0"
   },
@@ -24,6 +22,6 @@
     "react": "^18.3.0"
   },
   "paperclipPlugin": {
-    "manifest": "dist/manifest.js"
+    "manifest": "./dist/manifest.js"
   }
 }

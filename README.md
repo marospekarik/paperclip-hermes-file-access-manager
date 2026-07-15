@@ -1,55 +1,74 @@
 # File Access Manager
 
-A [Paperclip AI](https://paperclipai.com) plugin that gives administrators a visual UI for managing Hermes `file_access` permissions per agent.
+A [Paperclip](https://paperclip.ing) plugin that manages the write sandbox of
+[Hermes](https://hermes-agent.nousresearch.com)-backed agents from the Paperclip UI.
 
-## What it does
+## What it actually does
 
-Paperclip agents that run on top of Hermes inherit filesystem access from a Hermes profile (`~/.hermes/profiles/<profile>/config.yaml`). This plugin adds:
+Hermes (0.6.x) enforces exactly two filesystem write controls
+(`agent/file_safety.py`):
 
-- **Filesystem tree browser** — scan and expand paths starting from a configurable root.
-- **R / RW / Denied permissions** — cycle each path through None, Read-only (`R`), Read+Write (`RW`), or Denied (`D`).
-- **Hermes `config.yaml` injection** — persisted under the `file_access:` block in the matching Hermes profile.
-- **Two UI surfaces** — a company settings page and a per-agent detail tab.
+1. **Protected paths** — credential stores (`~/.ssh/`, `~/.aws/`, `.env` files,
+   `auth.json`, …) are always write-denied. Not configurable.
+2. **`HERMES_WRITE_SAFE_ROOT`** — an optional env var of colon-separated
+   directory roots. When set, `write_file`/`patch` operations outside those
+   roots are hard-blocked.
 
-## Repository layout
+Reads are unrestricted, and there is **no** `file_access:` block in Hermes
+`config.yaml` — earlier versions of this plugin wrote one, and it was inert.
+If your profiles still contain a `file_access:` block, it is safe to delete.
+
+This plugin edits the one line Hermes actually honors:
+`HERMES_WRITE_SAFE_ROOT=...` in the profile's `$HERMES_HOME/.env`. All other
+`.env` lines (API keys, bot tokens) pass through byte-identically via an
+atomic temp-file-plus-rename write. Changes apply the next time the agent's
+Hermes process starts.
+
+## UI surfaces
+
+- **Company settings → File Access** — pick any Hermes-backed agent, edit its
+  write roots.
+- **Agent detail → File Access tab** — the same editor scoped to that agent.
+
+Per-agent profile resolution: the
+[hermes-paperclip-adapter](https://github.com/henkey/hermes-paperclip-adapter)
+passes extra env through `adapterConfig.env`; agents with
+`adapterConfig.env.HERMES_HOME` use that profile, others default to `~/.hermes`.
+
+## Architecture
+
+Built on the official [`@paperclipai/plugin-sdk`](https://www.npmjs.com/package/@paperclipai/plugin-sdk):
 
 ```
-.
-├── src/
-│   ├── manifest.ts          # Paperclip plugin manifest
-│   ├── worker.ts            # Plugin worker (routes + config read/write)
-│   ├── paperclip-types.ts   # Minimal Paperclip runtime types
-│   └── ui/
-│       └── index.tsx        # React UI for the settings page and agent tab
-├── build.ts                 # Bun build script
-├── smoke.ts                 # Standalone CLI smoke test (no Paperclip host)
-├── tsconfig.json
-└── package.json
+src/
+├── manifest.ts   # PaperclipPluginManifestV1 — two UI slots, three capabilities
+├── hermes.ts     # Pure logic: .env line editing, root validation (unit-tested)
+├── worker.ts     # definePlugin: data/actions bridge handlers
+└── ui/index.tsx  # React components using SDK hooks (usePluginData/usePluginAction)
+tests/            # bun test — hermes core + worker via createTestHarness
+build.ts          # Bun.build per the SDK bundler contract
 ```
 
-## Build
+The UI talks to the worker over the SDK bridge (`usePluginData` /
+`usePluginAction`) — the plugin registers no HTTP API routes.
+
+## Build & test
 
 ```bash
 bun install
-bun run build
+bun run build       # dist/worker.js, dist/manifest.js, dist/ui/index.js
+bun run typecheck
+bun test
 ```
 
-The build produces:
-
-- `dist/worker.js`
-- `dist/ui/index.js`
-- `dist/manifest.js`
-
-## Install in Paperclip
-
-After building, install the plugin from the project directory:
+## Install into Paperclip
 
 ```bash
-export PAPERCLIP_API_KEY="your-board-api-key"
+export PAPERCLIP_API_KEY="<board api key with instance_admin>"
 bash install-plugin.sh
 ```
 
-Or use the Paperclip API directly:
+Or via the API directly:
 
 ```bash
 curl -X POST "$PAPERCLIP_API_BASE/plugins/install" \
@@ -58,21 +77,11 @@ curl -X POST "$PAPERCLIP_API_BASE/plugins/install" \
   -d '{"packageName":"/path/to/file-access-manager","isLocalPath":true}'
 ```
 
-## Smoke test (standalone)
-
-`smoke.ts` exercises the worker logic against real Hermes profiles without needing a Paperclip host:
-
-```bash
-bun run smoke.ts
-```
-
-It reads/writes `file_access` blocks in `~/.hermes/profiles/<profile>/config.yaml` and reverts the changes at the end.
-
 ## Requirements
 
-- Bun runtime
-- Paperclip AI host >= `2026.609.0`
-- Hermes profile config at `~/.hermes/profiles/<profile>/config.yaml`
+- Bun (build/test) — the worker itself runs under the host's node runtime
+- Paperclip host `2026.609.0` (SDK version is pinned to match)
+- Hermes profiles at `$HERMES_HOME` (default `~/.hermes`)
 
 ## License
 

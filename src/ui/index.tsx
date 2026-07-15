@@ -1,219 +1,206 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import type {
-  AgentFileAccessState,
-  PermissionState,
-} from "../paperclip-types.js";
+import React, { useState } from "react";
+import {
+  useHostContext,
+  usePluginAction,
+  usePluginData,
+} from "@paperclipai/plugin-sdk/ui";
+import type { PluginDetailTabProps } from "@paperclipai/plugin-sdk/ui";
+import type { AgentWriteAccess } from "../worker.js";
 
-// These APIs are injected by the Paperclip host at runtime.
-declare const paperclip: {
-  api: {
-    get: (path: string) => Promise<unknown>;
-    post: (path: string, body: unknown) => Promise<unknown>;
-  };
-};
-
-interface TreeNode {
-  path: string;
+interface AgentSummary {
+  id: string;
   name: string;
-  kind: "file" | "dir";
-  children?: TreeNode[];
-  expanded?: boolean;
-  loading?: boolean;
+  adapterType: string;
+  configurable: boolean;
+  hermesHome: string | null;
 }
 
-function stateLabel(s: PermissionState | undefined): string {
-  if (s === "R") return "R";
-  if (s === "RW") return "RW";
-  if (s === "D") return "D";
-  return "-";
-}
+const styles = {
+  wrap: { fontFamily: "inherit", padding: 16, maxWidth: 720 },
+  row: { display: "flex", gap: 8, alignItems: "center", marginBottom: 8 },
+  note: { fontSize: 13, opacity: 0.75, margin: "8px 0" },
+  error: { color: "#c0392b", margin: "8px 0" },
+  code: { fontFamily: "monospace", fontSize: 13 },
+} as const;
 
-function stateClass(s: PermissionState | undefined): string {
-  if (s === "R") return "fac-state-r";
-  if (s === "RW") return "fac-state-rw";
-  if (s === "D") return "fac-state-d";
-  return "fac-state-none";
-}
-
-const FileAccessEditor: React.FC<{
-  agentId?: string;
-  profileName?: string;
-}> = ({ agentId, profileName }) => {
-  const [state, setState] = useState<AgentFileAccessState | null>(null);
-  const [root, setRoot] = useState<string>("/");
-  const [tree, setTree] = useState<TreeNode[]>([]);
-  const [status, setStatus] = useState<string>("");
-  const [error, setError] = useState<string>("");
-
-  const apiPath = agentId
-    ? `/agents/${agentId}/file-access`
-    : `/agents/default/file-access`;
-
-  const refresh = useCallback(async () => {
-    setStatus("Loading...");
-    setError("");
-    try {
-      const data = (await paperclip.api.get(apiPath)) as AgentFileAccessState;
-      setState(data);
-      setStatus(`Profile: ${data.profileName}`);
-    } catch (e: any) {
-      setError(e?.message || String(e));
-      setStatus("");
-    }
-  }, [apiPath]);
-
-  const loadChildren = useCallback(async (parentPath: string) => {
-    try {
-      const children = (await paperclip.api.get(
-        `/scan?root=${encodeURIComponent(parentPath)}`,
-      )) as string[];
-      return children.map((child) => ({
-        path: child,
-        name: child.split("/").pop() || child,
-        kind: "dir" as const,
-        expanded: false,
-      }));
-    } catch (e: any) {
-      setError(e?.message || String(e));
-      return [];
-    }
-  }, []);
-
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  useEffect(() => {
-    (async () => {
-      const nodes = await loadChildren(root);
-      setTree(nodes);
-    })();
-  }, [root, loadChildren]);
-
-  const paths = useMemo(() => state?.paths ?? {}, [state]);
-
-  const setPathState = useCallback(
-    (target: string, next: PermissionState | undefined) => {
-      setState((prev) => {
-        if (!prev) return prev;
-        const nextPaths = { ...prev.paths };
-        if (next === undefined) delete nextPaths[target];
-        else nextPaths[target] = next;
-        return { ...prev, paths: nextPaths };
-      });
-    },
-    [],
+function WriteAccessEditor({
+  companyId,
+  agentId,
+}: {
+  companyId: string;
+  agentId: string;
+}) {
+  const { data, loading, error, refresh } = usePluginData<AgentWriteAccess>(
+    "agent-write-access",
+    { companyId, agentId },
   );
+  const save = usePluginAction("set-agent-write-access");
+  const [draft, setDraft] = useState<string[] | null>(null);
+  const [newRoot, setNewRoot] = useState("");
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
-  const save = useCallback(async () => {
-    setStatus("Saving...");
-    setError("");
-    try {
-      await paperclip.api.post(apiPath, { paths: state?.paths ?? {} });
-      setStatus("Saved");
-    } catch (e: any) {
-      setError(e?.message || String(e));
-      setStatus("");
-    }
-  }, [apiPath, state?.paths]);
+  if (loading) return <div style={styles.wrap}>Loading…</div>;
+  if (error) return <div style={{ ...styles.wrap, ...styles.error }}>{error.message}</div>;
+  if (!data) return null;
 
-  const toggleExpand = useCallback(
-    async (node: TreeNode) => {
-      const nextTree = [...tree];
-      if (node.expanded) {
-        node.expanded = false;
-        setTree(nextTree);
-        return;
-      }
-      node.loading = true;
-      setTree(nextTree);
-      const children = await loadChildren(node.path);
-      node.children = children;
-      node.expanded = true;
-      node.loading = false;
-      setTree([...nextTree]);
-    },
-    [loadChildren, tree],
-  );
-
-  const cycleState = useCallback((node: TreeNode) => {
-    const current = paths[node.path];
-    const order: (PermissionState | undefined)[] = [undefined, "R", "RW", "D"];
-    const next = order[(order.indexOf(current) + 1) % order.length];
-    setPathState(node.path, next);
-  }, [paths, setPathState]);
-
-  const renderNode = (node: TreeNode, siblings: TreeNode[], idx: number) => {
-    const current = paths[node.path];
+  if (!data.configurable) {
     return (
-      <div key={node.path} className="fac-node" style={{ marginLeft: 16 }}>
-        <div className="fac-row">
-          <span
-            className="fac-expander"
-            onClick={() => toggleExpand(node)}
-            style={{ cursor: "pointer", minWidth: 18, display: "inline-block" }}
-          >
-            {node.kind === "dir" ? (node.expanded ? "▼" : "▶") : "·"}
-          </span>
-          <span className="fac-name" style={{ flex: 1 }}>{node.name}</span>
-          <button
-            className={`fac-state ${stateClass(current)}`}
-            onClick={() => cycleState(node)}
-            title="Click to cycle: none, R, RW, D"
-          >
-            {stateLabel(current)}
-          </button>
-          {node.loading && <span className="fac-loading">…</span>}
-        </div>
-        {node.expanded && node.children && (
-          <div className="fac-children">
-            {node.children.map((child, i) => renderNode(child, node.children!, i))}
-          </div>
-        )}
+      <div style={styles.wrap}>
+        <p>
+          <strong>{data.agentName}</strong> uses the{" "}
+          <code style={styles.code}>{data.adapterType}</code> adapter — it does
+          not run on Hermes, so there is no write sandbox to manage here.
+        </p>
       </div>
     );
-  };
+  }
+
+  const roots = draft ?? data.roots;
+  const dirty = draft !== null;
+
+  async function handleSave() {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await save({ companyId, agentId, roots });
+      setDraft(null);
+      refresh();
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
-    <div className="fac-editor" style={{ fontFamily: "system-ui, sans-serif", padding: 16 }}>
-      <h3>File Access Manager</h3>
-      {profileName && <p>Profile: {profileName}</p>}
-      <div className="fac-toolbar" style={{ display: "flex", gap: 12, marginBottom: 12 }}>
-        <label>
-          Root:{" "}
-          <input
-            value={root}
-            onChange={(e) => setRoot(e.target.value)}
-          />
-        </label>
-        <button onClick={refresh}>Refresh</button>
-        <button onClick={save}>Save</button>
+    <div style={styles.wrap}>
+      <h3>Write access — {data.agentName}</h3>
+      <p style={styles.note}>
+        Profile: <code style={styles.code}>{data.hermesHome}</code>. {data.note}
+      </p>
+      <p style={styles.note}>
+        With no roots configured, Hermes allows writes anywhere outside its
+        protected paths. Adding one or more roots restricts{" "}
+        <code style={styles.code}>write_file</code>/
+        <code style={styles.code}>patch</code> to those directories.
+      </p>
+
+      <h4>Allowed write roots</h4>
+      {roots.length === 0 && <p style={styles.note}>No roots configured (writes unrestricted).</p>}
+      {roots.map((root, i) => (
+        <div key={`${i}:${root}`} style={styles.row}>
+          <code style={{ ...styles.code, flex: 1 }}>{root}</code>
+          <button
+            type="button"
+            onClick={() => setDraft(roots.filter((_, j) => j !== i))}
+          >
+            Remove
+          </button>
+        </div>
+      ))}
+      <div style={styles.row}>
+        <input
+          style={{ flex: 1 }}
+          placeholder="/absolute/path or ~/path"
+          value={newRoot}
+          onChange={(e) => setNewRoot(e.target.value)}
+        />
+        <button
+          type="button"
+          disabled={newRoot.trim().length === 0}
+          onClick={() => {
+            const value = newRoot.trim();
+            if (!roots.includes(value)) setDraft([...roots, value]);
+            setNewRoot("");
+          }}
+        >
+          Add
+        </button>
       </div>
-      {status && <div className="fac-status">{status}</div>}
-      {error && <div className="fac-error" style={{ color: "red" }}>{error}</div>}
-      <div className="fac-tree">
-        {tree.map((node, idx) => renderNode(node, tree, idx))}
+
+      <div style={styles.row}>
+        <button type="button" onClick={handleSave} disabled={!dirty || saving}>
+          {saving ? "Saving…" : "Save"}
+        </button>
+        {dirty && (
+          <button type="button" onClick={() => setDraft(null)} disabled={saving}>
+            Discard
+          </button>
+        )}
       </div>
-      <h4>Configured paths</h4>
-      <ul className="fac-path-list">
-        {Object.entries(paths).map(([p, s]) => (
+      {saveError && <p style={styles.error}>{saveError}</p>}
+
+      <h4>Always protected (enforced by Hermes)</h4>
+      <ul>
+        {data.protectedPaths.map((p) => (
           <li key={p}>
-            {p} {'=>'} <span className={`fac-state ${stateClass(s)}`}>{stateLabel(s)}</span>
-            <button onClick={() => setPathState(p, undefined)}>Remove</button>
+            <code style={styles.code}>{p}</code>
           </li>
         ))}
       </ul>
     </div>
   );
-};
+}
 
-export const FileAccessPage: React.FC = () => {
-  return <FileAccessEditor />;
-};
+export function FileAccessPage() {
+  const context = useHostContext();
+  const companyId = context.companyId ?? "";
+  const { data: agents, loading, error } = usePluginData<AgentSummary[]>(
+    "hermes-agents",
+    { companyId },
+  );
+  const [selected, setSelected] = useState<string>("");
 
-export const AgentFileAccessTab: React.FC<{ agentId: string }> = ({ agentId }) => {
-  return <FileAccessEditor agentId={agentId} />;
-};
+  if (!companyId) return <div style={styles.wrap}>No active company.</div>;
+  if (loading) return <div style={styles.wrap}>Loading agents…</div>;
+  if (error) return <div style={{ ...styles.wrap, ...styles.error }}>{error.message}</div>;
 
-export { FileAccessEditor };
-export default FileAccessPage;
+  const hermesAgents = (agents ?? []).filter((a) => a.configurable);
+
+  return (
+    <div style={styles.wrap}>
+      <h2>File Access Manager</h2>
+      <p style={styles.note}>
+        Manages each Hermes agent&apos;s write sandbox (
+        <code style={styles.code}>HERMES_WRITE_SAFE_ROOT</code> in the
+        profile&apos;s <code style={styles.code}>.env</code>).
+      </p>
+      {hermesAgents.length === 0 ? (
+        <p>No Hermes-backed agents in this company.</p>
+      ) : (
+        <div style={styles.row}>
+          <label htmlFor="fam-agent">Agent:</label>
+          <select
+            id="fam-agent"
+            value={selected}
+            onChange={(e) => setSelected(e.target.value)}
+          >
+            <option value="">Select an agent…</option>
+            {hermesAgents.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      {selected && (
+        <WriteAccessEditor key={selected} companyId={companyId} agentId={selected} />
+      )}
+    </div>
+  );
+}
+
+export function AgentFileAccessTab({ context }: PluginDetailTabProps) {
+  if (!context.companyId || !context.entityId) {
+    return <div style={styles.wrap}>Missing agent context.</div>;
+  }
+  return (
+    <WriteAccessEditor
+      key={context.entityId}
+      companyId={context.companyId}
+      agentId={context.entityId}
+    />
+  );
+}

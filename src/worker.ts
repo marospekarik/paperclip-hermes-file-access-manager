@@ -1,158 +1,111 @@
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
-import * as os from "node:os";
-import * as yaml from "js-yaml";
-import type {
-  AgentFileAccessState,
-  FileAccessConfig,
-  PermissionState,
-  RouteContext,
-  WorkerApi,
-} from "./paperclip-types.js";
+import { definePlugin, runWorker } from "@paperclipai/plugin-sdk";
+import {
+  PROTECTED_PATHS,
+  isHermesAdapter,
+  readRoots,
+  resolveHermesHome,
+  validateRoot,
+  writeRoots,
+} from "./hermes.js";
 
-export interface HermesProfile {
-  name: string;
-  configPath: string;
+const ENFORCEMENT_NOTE =
+  "Hermes restricts writes only (HERMES_WRITE_SAFE_ROOT); reads are " +
+  "unrestricted. Changes apply when the agent's Hermes process next starts.";
+
+export interface AgentWriteAccess {
+  agentId: string;
+  agentName: string;
+  adapterType: string;
+  configurable: boolean;
+  hermesHome: string;
+  roots: string[];
+  protectedPaths: string[];
+  note: string;
 }
 
-export function resolveProfilePath(profileName: string): string {
-  if (profileName.includes("/") || profileName.includes("\\")) {
-    throw new Error("Invalid profile name: path separators not allowed");
+interface AgentParams {
+  companyId?: unknown;
+  agentId?: unknown;
+}
+
+function requireString(value: unknown, name: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${name} is required`);
   }
-  const home = os.homedir();
-  return path.join(home, ".hermes", "profiles", profileName, "config.yaml");
+  return value;
 }
 
-function fallbackProfileName(agent: { id?: string; name?: string }): string {
-  // Paperclip agent names for Ordillect are prefixed with the Hermes profile name
-  // e.g. "ord-engineer". If not, use the agent id or name as a last resort.
-  const fromName = agent.name?.match(/^(ord-[a-z]+)/)?.[1];
-  return fromName || agent.name || agent.id || "default";
-}
+const plugin = definePlugin({
+  async setup(ctx) {
+    async function loadAgent(params: AgentParams) {
+      const companyId = requireString(params.companyId, "companyId");
+      const agentId = requireString(params.agentId, "agentId");
+      const agent = await ctx.agents.get(agentId, companyId);
+      if (!agent) throw new Error(`Agent not found: ${agentId}`);
+      return agent;
+    }
 
-export function mapPermissionToConfig(
-  paths: Record<string, PermissionState>,
-): FileAccessConfig {
-  const allowed_paths: string[] = [];
-  const read_only_paths: string[] = [];
-  const denied_paths: string[] = [];
-  for (const [p, state] of Object.entries(paths)) {
-    if (state === "RW") allowed_paths.push(p);
-    else if (state === "R") read_only_paths.push(p);
-    else if (state === "D") denied_paths.push(p);
-  }
-  return { allowed_paths, read_only_paths, denied_paths };
-}
+    ctx.data.register("hermes-agents", async (params) => {
+      const companyId = requireString(
+        (params as AgentParams).companyId,
+        "companyId",
+      );
+      const agents = await ctx.agents.list({ companyId });
+      return agents.map((agent) => ({
+        id: agent.id,
+        name: agent.name,
+        adapterType: agent.adapterType,
+        configurable: isHermesAdapter(agent.adapterType),
+        hermesHome: isHermesAdapter(agent.adapterType)
+          ? resolveHermesHome(agent.adapterConfig)
+          : null,
+      }));
+    });
 
-export function mapConfigToPermissions(
-  config: Partial<FileAccessConfig>,
-): Record<string, PermissionState> {
-  const out: Record<string, PermissionState> = {};
-  for (const p of config.allowed_paths ?? []) out[p] = "RW";
-  for (const p of config.read_only_paths ?? []) out[p] = "R";
-  for (const p of config.denied_paths ?? []) out[p] = "D";
-  return out;
-}
-
-export async function readProfileConfig(
-  profileName: string,
-): Promise<AgentFileAccessState> {
-  const configPath = resolveProfilePath(profileName);
-  let raw = "";
-  try {
-    raw = await fs.readFile(configPath, "utf8");
-  } catch (err: any) {
-    if (err?.code === "ENOENT") {
-      return {
-        profileName,
-        paths: {},
-        updatedAt: new Date().toISOString(),
+    ctx.data.register("agent-write-access", async (params) => {
+      const agent = await loadAgent(params as AgentParams);
+      const configurable = isHermesAdapter(agent.adapterType);
+      const hermesHome = resolveHermesHome(agent.adapterConfig);
+      const result: AgentWriteAccess = {
+        agentId: agent.id,
+        agentName: agent.name,
+        adapterType: agent.adapterType,
+        configurable,
+        hermesHome,
+        roots: configurable ? await readRoots(hermesHome) : [],
+        protectedPaths: [...PROTECTED_PATHS],
+        note: ENFORCEMENT_NOTE,
       };
-    }
-    throw err;
-  }
-// js-yaml v4.x: load() defaults to safe loading (same as safeLoad in v3).
-  const parsed = yaml.load(raw) as Record<string, unknown> | null;
-  const fac = (parsed?.file_access ?? {}) as Partial<FileAccessConfig>;
-  return {
-    profileName,
-    paths: mapConfigToPermissions(fac),
-    updatedAt: new Date().toISOString(),
-  };
-}
+      return result;
+    });
 
-export async function writeProfileConfig(
-  profileName: string,
-  paths: Record<string, PermissionState>,
-): Promise<AgentFileAccessState> {
-  const configPath = resolveProfilePath(profileName);
-  let parsed: Record<string, unknown> = {};
-  try {
-    const raw = await fs.readFile(configPath, "utf8");
-    // js-yaml v4.x: load() defaults to safe loading (same as safeLoad in v3).
-    parsed = (yaml.load(raw) as Record<string, unknown>) || {};
-  } catch (err: any) {
-    if (err?.code !== "ENOENT") throw err;
-  }
+    ctx.actions.register("set-agent-write-access", async (params) => {
+      const agent = await loadAgent(params as AgentParams);
+      if (!isHermesAdapter(agent.adapterType)) {
+        throw new Error(
+          `Agent ${agent.name} uses adapter "${agent.adapterType}", which this plugin cannot configure`,
+        );
+      }
+      const rawRoots = (params as { roots?: unknown }).roots;
+      if (!Array.isArray(rawRoots) || rawRoots.some((r) => typeof r !== "string")) {
+        throw new Error("roots must be an array of strings");
+      }
+      const roots = (rawRoots as string[]).map((r) => r.trim());
+      for (const root of roots) {
+        const error = validateRoot(root);
+        if (error) throw new Error(`Invalid write root "${root}": ${error}`);
+      }
+      const hermesHome = resolveHermesHome(agent.adapterConfig);
+      await writeRoots(hermesHome, roots);
+      ctx.logger.info("Updated Hermes write roots", {
+        agentId: agent.id,
+        hermesHome,
+        rootCount: roots.length,
+      });
+      return { agentId: agent.id, hermesHome, roots };
+    });
+  },
+});
 
-  const fac = mapPermissionToConfig(paths);
-  parsed.file_access = fac;
-
-  const raw = yaml.dump(parsed, { lineWidth: -1, noRefs: true });
-  await fs.mkdir(path.dirname(configPath), { recursive: true });
-  await fs.writeFile(configPath, raw, "utf8");
-
-  return {
-    profileName,
-    paths,
-    updatedAt: new Date().toISOString(),
-  };
-}
-
-export async function scanFilesystem(root: string): Promise<string[]> {
-  const entries: string[] = [];
-  try {
-    const dir = await fs.opendir(root);
-    for await (const entry of dir) {
-      if (entry.name.startsWith(".")) continue;
-      entries.push(path.join(root, entry.name));
-    }
-  } catch (err: any) {
-    if (err?.code === "EACCES" || err?.code === "ENOENT") {
-      return [];
-    }
-    throw err;
-  }
-  return entries.sort();
-}
-
-export function createWorker(api: WorkerApi): void {
-  api.onRoute("getAgentFileAccess", async (ctx: RouteContext) => {
-    const agentId = ctx.params.agentId;
-    const agents = await api.getAgents();
-    const agent = agents.find((a) => a.id === agentId);
-    const profileName =
-      (agent?.adapterConfig?.HERMES_PROFILE as string | undefined) ||
-      (agent?.adapterConfig?.hermesProfile as string | undefined) ||
-      fallbackProfileName(agent ?? { id: agentId });
-    return readProfileConfig(profileName);
-  });
-
-  api.onRoute("setAgentFileAccess", async (ctx: RouteContext) => {
-    const agentId = ctx.params.agentId;
-    const body = (ctx.body || {}) as { paths?: Record<string, PermissionState> };
-    const agents = await api.getAgents();
-    const agent = agents.find((a) => a.id === agentId);
-    const profileName =
-      (agent?.adapterConfig?.HERMES_PROFILE as string | undefined) ||
-      (agent?.adapterConfig?.hermesProfile as string | undefined) ||
-      fallbackProfileName(agent ?? { id: agentId });
-    const paths = body.paths || {};
-    return writeProfileConfig(profileName, paths);
-  });
-
-  api.onRoute("scanPath", async (ctx: RouteContext) => {
-    const root = ctx.query.root || "/";
-    return scanFilesystem(root);
-  });
-}
+export default plugin;
+runWorker(plugin, import.meta.url);

@@ -1,29 +1,18 @@
-import type {
-  PluginManifest,
-  PluginUiSlotDeclaration,
-} from "./paperclip-types.js";
+import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 
-export const manifest: PluginManifest = {
+const manifest: PaperclipPluginManifestV1 = {
   id: "ordillect.file-access-manager",
   apiVersion: 1,
-  version: "0.1.0",
+  version: "0.2.0",
   displayName: "File Access Manager",
   description:
-    "Manage Hermes file_access permissions (R / RW / Denied) per agent from a visual UI.",
+    "Manage the Hermes write sandbox (HERMES_WRITE_SAFE_ROOT) per agent from Paperclip.",
   author: "Ordillect",
   categories: ["ui"],
-  minimumHostVersion: "2026.609.0",
-  capabilities: [
-    "agents.read",
-    "ui.page.register",
-    "ui.detailTab.register",
-    "plugin.state.read",
-    "plugin.state.write",
-    "api.routes.register",
-  ],
+  capabilities: ["agents.read", "ui.page.register", "ui.detailTab.register"],
   entrypoints: {
-    worker: "dist/worker.js",
-    ui: "dist/ui/index.js",
+    worker: "./dist/worker.js",
+    ui: "./dist/ui",
   },
   ui: {
     slots: [
@@ -33,39 +22,16 @@ export const manifest: PluginManifest = {
         displayName: "File Access",
         routePath: "file-access",
         exportName: "FileAccessPage",
-      } as PluginUiSlotDeclaration,
+      },
       {
         type: "detailTab",
         id: "agent-file-access",
         displayName: "File Access",
         entityTypes: ["agent"],
         exportName: "AgentFileAccessTab",
-      } as PluginUiSlotDeclaration,
+      },
     ],
   },
-  apiRoutes: [
-    {
-      routeKey: "getAgentFileAccess",
-      method: "GET",
-      path: "/agents/:agentId/file-access",
-      auth: "board",
-      capability: "api.routes.register",
-    },
-    {
-      routeKey: "setAgentFileAccess",
-      method: "POST",
-      path: "/agents/:agentId/file-access",
-      auth: "board",
-      capability: "api.routes.register",
-    },
-    {
-      routeKey: "scanPath",
-      method: "GET",
-      path: "/scan",
-      auth: "board",
-      capability: "api.routes.register",
-    },
-  ],
 };
 
 export default manifest;
