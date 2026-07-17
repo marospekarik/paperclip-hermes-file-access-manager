@@ -86,7 +86,7 @@ Rewrite file-access-manager so it builds, typechecks, and passes tests against t
 ### UI
 - [x] ISC-26: `src/ui/index.tsx` imports hooks from `@paperclipai/plugin-sdk/ui` (no `declare const paperclip`)
 - [x] ISC-27: Exports `FileAccessPage` (company settings) and `AgentFileAccessTab` (detail tab) matching manifest `exportName`s
-- [x] ISC-28: Editor displays protected paths read-only and states "reads unrestricted; applies on next agent start"
+- [x] ISC-28: Editor displays protected paths read-only and states scope honestly: write_file/patch tools only, reads unrestricted, terminal not path-restricted on local backend, applies on next agent start (refined 2026-07-17)
 - [x] ISC-29: Save path calls `usePluginAction("set-agent-write-access")`; errors render in the component
 
 ### Build, tests, docs
@@ -143,6 +143,12 @@ Rewrite file-access-manager so it builds, typechecks, and passes tests against t
   - refuted by: Forge audit — on CRLF files the key line fails to match, leaving the old line intact and appending a second `HERMES_WRITE_SAFE_ROOT`, corrupting the file's core invariant.
   - learned: line-editing code needs explicit EOL handling and fixtures for CRLF, quoted values, and missing trailing newlines — happy-path fixtures make green tests that prove nothing about the risky inputs.
   - criterion now: ISC-17/18 backed by CRLF, quoted-value, and no-trailing-newline regression tests (26 tests total).
+
+- 2026-07-17 —
+  - conjectured: `HERMES_WRITE_SAFE_ROOT` is "the one control Hermes actually enforces" for filesystem access, so managing it fully manages agent file access.
+  - refuted by: Maros — file access also flows through the terminal; confirmed in source: `tools/terminal_tool.py` never imports `agent/file_safety.py` (its guard is dangerous-command approval), so local-backend shell writes bypass the write roots; docs (configuration#local-backend) state "no isolation… same filesystem access as your user account".
+  - learned: the write-roots setting is a tool-level restriction on `write_file`/`patch`, not a sandbox; presenting it without the terminal caveat repeats the over-promising pattern this rewrite existed to remove. The `file_access:` config block remains unread by any Hermes code (only unrelated OAuth/Slack identifiers match).
+  - criterion now: ISC-28 requires the UI to state the tool-level scope, the terminal bypass on local backend, and the Docker-backend recommendation; README carries the same caveat with a docs link.
 
 ## Verification
 

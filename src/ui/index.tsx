@@ -80,10 +80,11 @@ function WriteAccessEditor({
         Profile: <code style={styles.code}>{data.hermesHome}</code>. {data.note}
       </p>
       <p style={styles.note}>
-        With no roots configured, Hermes allows writes anywhere outside its
-        protected paths. Adding one or more roots restricts{" "}
-        <code style={styles.code}>write_file</code>/
-        <code style={styles.code}>patch</code> to those directories.
+        With no roots configured, the <code style={styles.code}>write_file</code>/
+        <code style={styles.code}>patch</code> tools may write anywhere outside the
+        protected paths; adding roots restricts those tools to the listed
+        directories. This is a tool-level control, not a sandbox — the agent&apos;s
+        terminal is not path-restricted on the local backend.
       </p>
 
       <h4>Allowed write roots</h4>

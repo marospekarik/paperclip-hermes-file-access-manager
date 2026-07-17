@@ -9,8 +9,11 @@ import {
 } from "./hermes.js";
 
 const ENFORCEMENT_NOTE =
-  "Hermes restricts writes only (HERMES_WRITE_SAFE_ROOT); reads are " +
-  "unrestricted. Changes apply when the agent's Hermes process next starts.";
+  "HERMES_WRITE_SAFE_ROOT restricts Hermes's write_file/patch tools only. " +
+  "Reads are unrestricted, and terminal commands on the local backend run " +
+  "with full user permissions (guarded by dangerous-command approval, not " +
+  "path rules) — use the Docker terminal backend for hard isolation. " +
+  "Changes apply when the agent's Hermes process next starts.";
 
 export interface AgentWriteAccess {
   agentId: string;

@@ -5,8 +5,9 @@ A [Paperclip](https://paperclip.ing) plugin that manages the write sandbox of
 
 ## What it actually does
 
-Hermes (0.6.x) enforces exactly two filesystem write controls
-(`agent/file_safety.py`):
+Hermes (0.6.x) applies two path-based write controls, both scoped to its
+`write_file`/`patch` **tools** (`agent/file_safety.py`, enforced in
+`tools/file_operations.py`):
 
 1. **Protected paths** — credential stores (`~/.ssh/`, `~/.aws/`, `.env` files,
    `auth.json`, …) are always write-denied. Not configurable.
@@ -14,9 +15,17 @@ Hermes (0.6.x) enforces exactly two filesystem write controls
    directory roots. When set, `write_file`/`patch` operations outside those
    roots are hard-blocked.
 
+**Scope caveat:** this is a tool-level control, not a filesystem sandbox. On
+the local terminal backend the agent's shell runs with your user's full
+permissions and is guarded by dangerous-command approval, not path rules —
+terminal writes bypass `HERMES_WRITE_SAFE_ROOT`. For hard isolation, switch
+the profile to the Docker terminal backend (see the
+[configuration docs](https://hermes-agent.nousresearch.com/docs/user-guide/configuration#local-backend)).
+
 Reads are unrestricted, and there is **no** `file_access:` block in Hermes
-`config.yaml` — earlier versions of this plugin wrote one, and it was inert.
-If your profiles still contain a `file_access:` block, it is safe to delete.
+`config.yaml` — earlier versions of this plugin wrote one, and no Hermes code
+reads that key. If your profiles still contain a `file_access:` block, it is
+safe to delete.
 
 This plugin edits the one line Hermes actually honors:
 `HERMES_WRITE_SAFE_ROOT=...` in the profile's `$HERMES_HOME/.env`. All other
