@@ -9,7 +9,12 @@ const manifest: PaperclipPluginManifestV1 = {
     "Manage the Hermes write sandbox (HERMES_WRITE_SAFE_ROOT) per agent from Paperclip.",
   author: "Ordillect",
   categories: ["ui"],
-  capabilities: ["agents.read", "ui.page.register", "ui.detailTab.register"],
+  capabilities: [
+    "agents.read",
+    "instance.settings.register",
+    "ui.page.register",
+    "ui.detailTab.register",
+  ],
   entrypoints: {
     worker: "./dist/worker.js",
     ui: "./dist/ui",
