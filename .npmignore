@@ -1,0 +1,16 @@
+# The published package is defined by the `files` allowlist in package.json
+# (dist + README + LICENSE). This .npmignore exists on purpose: without it, npm
+# falls back to .gitignore, whose `dist/` entry would strip the built plugin
+# out of the tarball. Keeping this file empty of a `dist` rule guarantees the
+# built manifest ships.
+#
+# Internal dev artifacts (ISA.md, Plans/, tests/, src/) are excluded by the
+# allowlist, so they are never published — but list them here too as defense in
+# depth in case the allowlist is ever loosened.
+ISA.md
+Plans/
+tests/
+src/
+build.ts
+install-plugin.sh
+.github/

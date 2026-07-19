@@ -6,3 +6,7 @@ dist/
 .env.*
 .claude/
 skills-lock.json
+
+# Internal dev artifacts — not for the public repo or npm tarball
+ISA.md
+Plans/
