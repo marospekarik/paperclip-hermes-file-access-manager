@@ -44,7 +44,7 @@ Prerequisites:
 - **Docker or Podman** — needed for enforcement at runtime, not for install.
 
 ```bash
-git clone https://github.com/bagg-anon/file-access-manager.git
+git clone https://github.com/marospekarik/file-access-manager.git
 cd file-access-manager
 bun install && bun run build
 paperclipai plugin install --local "$PWD"
