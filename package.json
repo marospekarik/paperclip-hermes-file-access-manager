@@ -1,6 +1,6 @@
 {
   "name": "@ordillect/file-access-manager",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Paperclip plugin that enforces per-path filesystem isolation for Hermes agents via Docker bind mounts",
   "license": "MIT",
   "type": "module",
