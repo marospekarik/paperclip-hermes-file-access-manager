@@ -1,0 +1,61 @@
+name: CI
+
+# Builds, typechecks, and runs BOTH the unit suite and the mandatory real-Docker
+# integration suite. The integration suite launches actual containers and fails
+# the build if any filesystem permission or volume mount behaves differently
+# than configured. No manual setup — Docker is provisioned per-runner below.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # Linux runners ship with Docker preinstalled. macOS runners do not, so
+      # install Docker via Colima (a lightweight Docker Desktop alternative).
+      - name: Set up Docker (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install docker colima
+          colima start --cpu 2 --memory 4
+          docker version
+
+      - name: Verify Docker is available
+        run: docker version
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run build
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Unit tests
+        run: bun run test
+
+      - name: Pre-pull test image
+        run: docker pull alpine:3.20
+
+      - name: Integration tests (real Docker)
+        run: bun run test:integration
+
+      # Belt-and-braces: sweep any containers a crashed/timed-out test leaked,
+      # so a runner is never left dirty. Label-scoped, always runs.
+      - name: Reap leftover test containers
+        if: always()
+        run: docker rm -f $(docker ps -aq --filter label=fam-test=1) 2>/dev/null || true

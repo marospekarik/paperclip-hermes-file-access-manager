@@ -3,14 +3,18 @@ import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 const manifest: PaperclipPluginManifestV1 = {
   id: "ordillect.file-access-manager",
   apiVersion: 1,
-  version: "0.2.0",
+  version: "0.4.2",
   displayName: "File Access Manager",
   description:
-    "Manage the Hermes write sandbox (HERMES_WRITE_SAFE_ROOT) per agent from Paperclip.",
+    "Configure OS-level filesystem isolation per Hermes profile: discover profiles, " +
+    "mark host paths Read/Write, Read Only, or Denied, and enforce them with Docker " +
+    "bind mounts. Writes only to the profiles you select — never the router by accident.",
   author: "Ordillect",
   categories: ["ui"],
   capabilities: [
     "agents.read",
+    "plugin.state.read",
+    "plugin.state.write",
     "instance.settings.register",
     "ui.page.register",
     "ui.detailTab.register",

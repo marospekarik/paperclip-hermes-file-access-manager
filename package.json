@@ -1,17 +1,20 @@
 {
   "name": "@ordillect/file-access-manager",
   "version": "0.2.0",
-  "description": "Paperclip plugin that manages the Hermes write sandbox (HERMES_WRITE_SAFE_ROOT) per agent",
+  "description": "Paperclip plugin that enforces per-path filesystem isolation for Hermes agents via Docker bind mounts",
   "license": "MIT",
   "type": "module",
   "scripts": {
     "build": "NODE_ENV=production bun run build.ts",
     "typecheck": "bunx tsc --noEmit",
-    "test": "bun test",
+    "test": "bun test tests/*.spec.ts",
+    "test:integration": "bun test --timeout 120000 tests/integration",
+    "test:all": "bun test --timeout 120000",
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@paperclipai/plugin-sdk": "2026.609.0"
+    "@paperclipai/plugin-sdk": "2026.609.0",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@types/bun": "latest",

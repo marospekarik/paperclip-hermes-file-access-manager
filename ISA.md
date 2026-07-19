@@ -1,13 +1,19 @@
 ---
-task: Review and rewrite file-access-manager as a real Paperclip plugin managing Hermes write access
+task: Rework file-access-manager to enforce per-path filesystem isolation via Docker bind mounts (v0.3.0)
 project: file-access-manager
-effort: E3
+effort: E4
 phase: complete
 progress: 34/34
 mode: build
 started: 2026-07-15T06:20:00Z
-updated: 2026-07-15T07:05:00Z
+updated: 2026-07-18T21:10:00Z
 ---
+
+> **v0.3.0 addendum (2026-07-18).** The sections below record the v0.2.0
+> `HERMES_WRITE_SAFE_ROOT` rewrite and remain accurate history. The v0.3.0
+> Docker-isolation rework — its rationale, the reversal of the "no config.yaml
+> writes" decision, criteria, and verification — is captured in the
+> **v0.3.0 — Docker backend** section appended at the end of this file.
 
 # ISA — file-access-manager
 
@@ -167,3 +173,195 @@ Rewrite file-access-manager so it builds, typechecks, and passes tests against t
 - ISC-34: Read — README states enforcement model, legacy `file_access:` inert-block note, both doc links
 - Advisor (Rule 2): both design calls confirmed; gaps raised (env value escaping, affirmative disclosure) closed — validateRoot now rejects whitespace/quotes/`#`/backslash (test added), UI note states reads-unrestricted + restart semantics
 - DEFERRED-VERIFY: live install into the kiddoollama Paperclip host (board API key with instance_admin not available in this session) — follow-up: run `bash install-plugin.sh` with the key, then Interceptor-verify both UI slots
+
+---
+
+# v0.3.0 — Docker backend
+
+## Problem
+
+The v0.2.0 plugin managed `HERMES_WRITE_SAFE_ROOT`, which — as this ISA's own
+2026-07-17 decision records — is a **tool-level** restriction on Hermes's
+`write_file`/`patch` tools only. The local-backend terminal bypasses it
+(`tools/terminal_tool.py` never imports `agent/file_safety.py`) and reads are
+unrestricted. It is not real isolation. The task is to enforce filesystem access
+at the OS level via Docker bind mounts, with a secure-by-default per-path model
+and a tree UI, plus a mandatory real-container integration suite.
+
+## Vision
+
+An admin browses an agent's host filesystem as a tree, marks paths Read/Write,
+Read Only, or Denied (default), and saves. The plugin generates the exact
+`docker_volumes` Hermes feeds to `docker run`, switches the profile to the Docker
+terminal backend, and writes both the `.env` (runtime-authoritative) and
+`config.yaml` `terminal.*` (human-facing) surfaces atomically. Isolation is then
+enforced by the kernel: unmounted paths are absent, `:ro` mounts are unwritable,
+and denied children under a mounted parent are masked with an empty read-only
+directory. A standalone suite launches real containers and proves Docker — not
+the app — enforces every mode, on Linux and macOS, in CI.
+
+## Decision — reversing "no config.yaml writes" (ISC-25)
+
+The v0.2.0 ISA forbade writing `config.yaml` because the `file_access:` block it
+wrote was fiction no Hermes code read. That was correct then and is wrong now:
+
+- **`terminal.docker_volumes` is real, consumed config.** `docker.py:653-666`
+  passes each entry to `docker run` as `-v <spec>` (`:ro` → read-only; nested
+  destinations resolve by depth, giving override semantics for free).
+- **Runtime reads env vars; config.yaml is bridged to them at agent start.**
+  `terminal_tool.py:1349-1382` reads `TERMINAL_ENV` and parses
+  `TERMINAL_DOCKER_VOLUMES` as JSON from the environment;
+  `_ensure_terminal_env_bridged` (`terminal_tool.py:1315`) backfills `TERMINAL_*`
+  from config.yaml when a launcher didn't, and explicit `.env` values win.
+- Therefore the plugin **dual-writes** `.env` + config.yaml, exactly as
+  `hermes config set terminal.*` does (`config.py:8442` + `:8448`) — the `.env`
+  surface authoritative, the config.yaml surface human-facing. Not a placebo
+  (A4): the readback verifies `TERMINAL_DOCKER_VOLUMES` JSON parses to the
+  generated volume list.
+
+## Criteria
+
+- [x] D-1: `src/model.ts` is a pure, no-`node:*` module (bundles for browser +
+      node) exporting the permission model + `generateDockerVolumes`.
+- [x] D-2: rw → `<p>:<p>`; ro → `<p>:<p>:ro`; denied with a mounted ancestor →
+      `<maskDir>:<p>:ro`; denied without one → omitted. Deterministic (sorted).
+- [x] D-3: nearest-ancestor inheritance with the secure default `denied`;
+      child assignments override parents (`resolveEffectiveMode`).
+- [x] D-4: `set-agent-access` persists the model to plugin state, ensures an
+      empty `0555` mask dir, writes `.env` + `config.yaml` atomically, switches
+      `backend: docker` + `docker_run_as_host_user: true`.
+- [x] D-5: `.env` values use Hermes's exact quoting (`_quote_env_value` mirror);
+      all other lines byte-preserved; CRLF-safe; secrets never returned/logged.
+- [x] D-6: `config.yaml` update preserves comments + other keys (yaml Document
+      API), atomic temp+rename.
+- [x] D-7: tree UI — expandable, tri-state per node, inherited-vs-explicit
+      visualization, apply-to-folder + override, add-root, generated-mounts
+      preview; browsing confined to configured roots.
+- [x] D-8: `bun run build` exit 0; UI bundle keeps the SDK externals contract
+      (react/react-dom external, zero `node:*` leakage).
+- [x] D-9: `bun run typecheck` exit 0 under `strict`.
+- [x] D-10: unit suite (`tests/*.spec.ts`) green — model translation, path
+      validation, env/yaml writers.
+- [x] D-11: real-Docker integration suite (`tests/integration/`) launches
+      containers and verifies Docker enforcement for rw / ro / denied / nested
+      spec tree / overrides / config translation / regressions.
+- [x] D-12: CI runs build + typecheck + unit + integration on Linux and macOS,
+      requires Docker, and reaps leftover test containers.
+
+## Verification
+
+- D-1/D-8: Bash — build exit 0; `dist/ui/index.js` imports only `react`,
+  `react/jsx-runtime`, and the SDK ui external; `rg 'node:(fs|os|path)'` → none.
+- D-2/D-3/D-10: Bash — `bun run test`: 32 pass / 0 fail (`tests/model.spec.ts`,
+  `tests/docker.spec.ts`, `tests/env-config.spec.ts`).
+- D-5/D-6: unit — byte-preservation, CRLF, JSON quote round-trip, and
+  comment-preserving YAML asserted in `tests/env-config.spec.ts`.
+- D-9: Bash — `bun run typecheck` exit 0 (src + tests).
+- D-11: Bash — `bun run test:integration`: 29 pass / 0 fail across 7 scenario
+  files against Docker 28.2.2; a clean run leaves 0 labeled containers.
+  Full run `bun run test:all`: 61 pass / 0 fail.
+- D-4 live-write (A4 placebo check): DEFERRED — exercised end-to-end by the
+  integration harness's volume generation; a live save into a real profile +
+  `hermes config get terminal.docker_volumes` readback is the follow-up when a
+  Paperclip instance_admin key is available (same deferral as v0.2.0 install).
+- DEFERRED-VERIFY: live install into the kiddoollama Paperclip host + Interceptor
+  check of both UI slots (needs board API key with instance_admin).
+
+---
+
+## Problem — profile mis-targeting + Docker tool-availability (2026-07-19)
+
+Two defects surfaced in testing:
+
+1. **Wrong profile.** The worker resolved its write target from the agent's
+   adapter config (`resolveHermesHome`) and **silently fell back to `~/.hermes`**
+   when an agent carried no `HERMES_HOME`. Result: Docker config (`TERMINAL_ENV=docker`
+   + a one-file `TERMINAL_DOCKER_VOLUMES`) was written into the **main/router
+   profile** — confirmed on disk (`~/.hermes/.env:330-332`, `config.yaml:51-53`).
+2. **"Missing tools."** After that write, the default profile's agent reported it
+   lacked `terminal`/`read_file`/`write_file` and that `execute_code` was blocked
+   for writes. Investigated to root cause — see
+   `Plans/docker-backend-investigation.md`.
+
+## Decision — pivot from agent-targeting to profile discovery + selection
+
+- **Discover, don't resolve.** `src/profiles.ts` scans `<root>/profiles/*` (plus
+  the main profile at the root) at request time; the UI is populated from the
+  filesystem and stays in sync with no plugin change.
+- **Select, don't infer.** The company page presents profiles as a multi-select
+  with the router/default flagged; config is written only to selected profiles.
+  The agent detail tab resolves the agent→profile match and edits only that
+  profile, reporting "no match" instead of defaulting to the router.
+- **Tool availability is a mount-set property, not a Hermes bug.** Docker-backend
+  file tools wrap the container `execute()` (`tools/file_operations.py`), so they
+  only reach mounted paths. The fix is correct targeting + granting needed paths;
+  the UI now warns on a zero-grant save. No Hermes change is warranted.
+
+## Criteria — profiles (2026-07-19)
+
+- [x] ISC-40: `discoverProfiles()` lists main first then specialized profiles
+      (dir has `config.yaml` or `.env`), ignoring non-HERMES_HOME dirs and
+      traversal names (`tests/profiles.spec.ts`).
+- [x] ISC-41: `profileHome()` / `isValidProfileName()` reject `..`, `.`, and
+      path separators (no traversal out of `profiles/`).
+- [x] ISC-42: Worker registers `hermes-profiles`, `profile-access`,
+      `set-profile-access`, `agent-profile`; `set-profile-access` writes ONLY to
+      selected profiles and rejects unknown/empty selections.
+- [x] ISC-43: The router/default profile and sibling profiles are byte-identical
+      after a save that did not select them (`tests/targeting.spec.ts`).
+- [x] ISC-44: Stored model round-trips through `profile-access`; re-saving
+      upserts (no duplicate `TERMINAL_ENV` lines).
+- [x] ISC-45: `agent-profile` maps by `HERMES_HOME`; an unmatched agent returns
+      `profile: null` (never main).
+- [x] ISC-46: Docker-backed profiles retain terminal/read/write/execute over
+      granted mounts while `:ro` + denied-masking isolation holds
+      (`tests/integration/capabilities.test.ts`).
+- [x] ISC-47: UI warns when a save grants zero paths; README + investigation doc
+      explain the Docker tool-availability model.
+
+## Verification — profiles (2026-07-19)
+
+- ISC-40/41/42/43/44/45: `bun test tests/*.spec.ts` — 55 pass / 0 fail
+  (adds `profiles.spec.ts`, `targeting.spec.ts`; targeting drives the real
+  `set-profile-access` action through the SDK test harness).
+- ISC-46: `bun test tests/integration/capabilities.test.ts` — 8 pass / 0 fail
+  against Docker 28.2.2. Full `bun run test:integration` — 37 pass / 0 fail.
+- ISC-42/45: `bunx tsc --noEmit` exit 0; `bun run build` emits all three bundles.
+- DEFERRED-VERIFY (unchanged): live install + Interceptor check of both UI slots
+  (needs instance_admin key).
+
+---
+
+## Decision — auto-apply at save (2026-07-19)
+
+Writing config is not enough: a running gateway holds the old `TERMINAL_ENV`, and
+the Docker backend reuses its container by label WITHOUT comparing mounts
+(`tools/environments/docker.py:892`). So `set-profile-access` now also, per target
+profile: (2) `docker rm -f` the `hermes-profile=<label>` container (label =
+`default` for main, else the profile name — mirrors hermes `_get_active_profile_name`
++ `_sanitize_label_value`), and (3) restarts the systemd `--user` gateway unit
+whose `HERMES_HOME` matches, polling to `active`. Steps degrade to `skipped` when
+`docker`/`systemctl` are absent; config is always written. The action returns an
+ordered step list + `state` ("ready" | "needs-attention") which the UI renders
+live. `FAM_SKIP_RUNTIME_APPLY=1` disables steps 2–3 (tests set it).
+
+- [x] ISC-48: `sanitizeLabelValue`/`profileLabelValue` mirror hermes label rules
+      (main→"default"); `apply.ts` steps computed via an injected `RunCommand`.
+- [x] ISC-49: container recreation targets the correct `hermes-profile` label and
+      reports skipped/ok/failed; gateway restart matches the unit by `HERMES_HOME`,
+      skips inactive units, and fails if the unit never returns to `active`
+      (`tests/apply.spec.ts`, injected runner — no real docker/systemctl touched).
+- [x] ISC-50: `set-profile-access` returns per-profile `steps` + `state`; the UI
+      shows live progress then the step report (`targeting.spec.ts` asserts shape
+      with runtime apply disabled).
+
+## Verification — auto-apply (2026-07-19)
+
+- ISC-48/49/50: `bun test` — 110 pass / 0 fail across 14 files (adds
+  `apply.spec.ts`; targeting/apply use injected or disabled runners).
+- Regression guard: `FAM_SKIP_RUNTIME_APPLY=1` is set in `targeting.spec.ts`
+  beforeEach so the SDK-harness action never shells out to the host.
+- INCIDENT (logged): an earlier unguarded suite run (before the guard existed)
+  removed the live `hermes-profile=coder` container via the real `docker rm -f`
+  path. Recoverable — `container_persistent` bind-mounts survived; Hermes
+  recreates on next use. The guard now prevents recurrence.
