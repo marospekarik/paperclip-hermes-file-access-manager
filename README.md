@@ -1,5 +1,7 @@
 # File Access Manager
 
+![File Access Manager — mark host paths Read/Write, Read Only, or Denied per Hermes profile; the plugin turns your choices into Docker bind mounts, so the kernel enforces what each agent can read, write, or even see. A denied path simply does not exist inside the container.](.github/media/concept.png)
+
 **Kernel-enforced filesystem sandboxing for your AI agents.** A
 [Paperclip](https://paperclip.ing) plugin that lets you decide — per
 [Hermes](https://hermes-agent.nousresearch.com) profile, per path — exactly what
@@ -20,6 +22,14 @@ agent's shell can walk around.
   only to the ones you select; the router profile is never touched by accident.
 - **Battle-tested** — a real-Docker integration suite proves every permission
   mode on Linux and macOS in CI.
+
+## See it work
+
+Mark paths in the tree, watch the generated Docker mounts update live, then
+**Save & apply** — the plugin writes the profile config, recreates the sandbox
+container, and restarts the gateway, reporting each step.
+
+![Demo: cycling a path through Read → Read/Write updates a live preview of the exact Docker bind mounts; clicking Save & apply recreates the sandbox container, restarts the Hermes gateway, and reports each step as ready.](.github/media/flow.gif)
 
 ## Install
 
@@ -56,6 +66,8 @@ No CLI available? `./install-plugin.sh` wraps the REST API instead
 
 ## Use
 
+![The File Access editor — a filesystem tree where each path carries a Read / Read-Write / Denied toggle. Explicit rules show a coloured bar, inherited settings are tagged with a ↳ arrow, and a live panel previews the exact Docker bind mounts the plugin will generate.](.github/media/hero.png)
+
 - **Company settings → File Access** — select one or more profiles (the
   router/default is clearly flagged), browse the host filesystem tree, assign
   permissions, preview the generated mounts, save.
@@ -71,6 +83,8 @@ Folder settings inherit downward; deeper settings override — parent `rw`, chil
 `ro`, grandchild `denied` all hold at once. Broad grants (e.g. your whole home
 directory) are allowed but flagged: set `.ssh`, `.gnupg`, `.env` folders to
 Denied to mask them.
+
+![Granting the whole home directory triggers a warning; setting .ssh, .gnupg, and .env to Denied masks them with empty read-only mounts, shown in the preview as /var/lib/fam/mask entries even though the parent home directory is Read/Write.](.github/media/masking.png)
 
 Once a profile runs the Docker backend, `terminal`, `read_file`, `write_file`,
 and `execute_code` all operate inside the sandbox and see only granted paths. A
