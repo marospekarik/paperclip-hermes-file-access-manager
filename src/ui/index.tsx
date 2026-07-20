@@ -48,8 +48,8 @@ function nextMode(current: Mode): Mode {
 const STYLE = `
 .fam-root {
   --fam-fg: #1a1d21;
-  --fam-muted: #6b7280;
-  --fam-faint: #99a0a8;
+  --fam-muted: #4b5563;
+  --fam-faint: #6b7280;
   --fam-border: rgba(0,0,0,0.10);
   --fam-border-strong: rgba(0,0,0,0.20);
   --fam-row-hover: rgba(0,0,0,0.045);
@@ -69,8 +69,8 @@ const STYLE = `
 @media (prefers-color-scheme: dark) {
   .fam-root {
     --fam-fg: #e7e9ec;
-    --fam-muted: #9aa1aa;
-    --fam-faint: #6b727b;
+    --fam-muted: #b6bcc4;
+    --fam-faint: #8b9199;
     --fam-border: rgba(255,255,255,0.12);
     --fam-border-strong: rgba(255,255,255,0.24);
     --fam-row-hover: rgba(255,255,255,0.055);
