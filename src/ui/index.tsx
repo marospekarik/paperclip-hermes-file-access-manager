@@ -43,10 +43,31 @@ function nextMode(current: Mode): Mode {
 // Namespaced stylesheet. Inline styles can't express :hover / :focus-visible /
 // :active / transitions, so all interaction states live here under `fam-*`
 // classes. Tokens adapt to the host's light/dark theme via prefers-color-scheme.
+//
+// Responsive strategy — two independent axes, deliberately not conflated:
+//
+//   1. SPACE → `@container fam (max-width: …)`. This is a plugin panel embedded
+//      in the Paperclip host, so the viewport is the wrong thing to measure: a
+//      400px-wide desktop side panel needs the same layout as a phone, and a
+//      phone-width viewport hosting a wide panel does not. `.fam-root` declares
+//      `container-type: inline-size` and every layout breakpoint queries it.
+//      (Container queries must target descendants of the container, which is
+//      why page padding lives on the inner `.fam-page`, not on `.fam-root`.)
+//
+//   2. INPUT MODALITY → `@media (pointer: coarse)` / `(hover: hover)`. Touch
+//      targets and hover affordances depend on the input device, not on width.
+//      All `:hover` rules are gated behind `(hover: hover) and (pointer: fine)`
+//      so tapped elements don't keep a stuck hover state on touch, and the
+//      hover-revealed revert button stays permanently visible when there is no
+//      hover to reveal it with.
 // ---------------------------------------------------------------------------
 
 const STYLE = `
 .fam-root {
+  container-type: inline-size;
+  container-name: fam;
+  --fam-pad: 16px;
+  --fam-indent: 16px;
   --fam-fg: #1a1d21;
   --fam-muted: #4b5563;
   --fam-faint: #6b7280;
@@ -86,6 +107,9 @@ const STYLE = `
 }
 
 .fam-root * { box-sizing: border-box; }
+/* The padded page body. Separate from .fam-root because a container query
+   cannot match against its own container element. */
+.fam-page { padding: var(--fam-pad); max-width: 900px; }
 .fam-h1 { font-size: 18px; font-weight: 650; margin: 0 0 2px; letter-spacing: -0.01em; }
 .fam-h2 { font-size: 14px; font-weight: 620; margin: 0 0 6px; }
 .fam-sub { color: var(--fam-muted); margin: 0 0 14px; max-width: 62ch; }
@@ -93,7 +117,7 @@ const STYLE = `
 .fam-code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.86em; padding: 1px 5px; border-radius: 4px;
-  background: var(--fam-surface-2);
+  background: var(--fam-surface-2); word-break: break-word;
 }
 
 /* --- disclosure ("How this works") --- */
@@ -103,7 +127,6 @@ const STYLE = `
   background: none; border: none; cursor: pointer; padding: 2px 0;
   color: var(--fam-muted); font: inherit; font-size: 12px;
 }
-.fam-disclosure-btn:hover { color: var(--fam-fg); }
 .fam-disclosure-btn svg { transition: transform .18s ease; }
 .fam-disclosure-btn[aria-expanded="true"] svg { transform: rotate(90deg); }
 .fam-disclosure-body {
@@ -131,7 +154,6 @@ const STYLE = `
   transition: transform .08s ease, background .14s ease, border-color .14s ease, box-shadow .14s ease;
 }
 .fam-perm svg { width: 14px; height: 14px; flex: none; }
-.fam-perm:hover { border-color: var(--fam-border-strong); filter: brightness(1.03); }
 .fam-perm:active { transform: scale(0.95); }
 .fam-perm:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--fam-accent); }
 .fam-perm--ro  { border-color: var(--fam-ro-border);  background: var(--fam-ro-bg);  color: var(--fam-ro); }
@@ -139,24 +161,30 @@ const STYLE = `
 .fam-perm--denied { border-color: var(--fam-den-border); background: var(--fam-den-bg); color: var(--fam-den); }
 .fam-perm--inherited { border-style: dashed; opacity: 0.72; font-weight: 550; }
 .fam-perm--legend { cursor: default; min-width: 0; height: 22px; padding: 0 7px; }
-.fam-perm--legend:hover { filter: none; }
 
 /* --- tree --- */
 .fam-tree {
   border: 1px solid var(--fam-border); border-radius: 10px;
   max-height: min(58vh, 520px); overflow-y: auto; overflow-x: hidden;
   background: var(--fam-surface);
+  /* Touch: don't chain the scroll to the host page when the tree hits its end,
+     and keep momentum scrolling on iOS. */
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 .fam-root-group { border-top: 1px solid var(--fam-border); }
 .fam-root-group:first-child { border-top: none; }
 
+/* Depth indentation is a custom property (--fam-depth, set per row in JSX)
+   times a token (--fam-indent) so narrow containers can shrink the step
+   without JS knowing anything about the container width. */
 .fam-row {
   display: flex; align-items: center; gap: 4px;
-  padding: 3px 10px 3px 4px; position: relative;
+  padding: 3px 10px; position: relative;
+  padding-left: calc(6px + var(--fam-depth, 0) * var(--fam-indent));
   border-radius: 6px; margin: 1px 4px;
   transition: background .12s ease;
 }
-.fam-row:hover { background: var(--fam-row-hover); }
 .fam-row:focus-within { background: var(--fam-row-hover); }
 .fam-row--configured::before {
   content: ""; position: absolute; left: 0; top: 4px; bottom: 4px;
@@ -173,34 +201,38 @@ const STYLE = `
   color: var(--fam-muted); padding: 0;
   transition: background .12s ease, color .12s ease;
 }
-.fam-caret:hover { background: var(--fam-surface-2); color: var(--fam-fg); }
 .fam-caret:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--fam-accent); }
 .fam-caret svg { transition: transform .16s ease; }
 .fam-caret--open svg { transform: rotate(90deg); }
 .fam-caret--leaf { cursor: default; }
-.fam-caret--leaf:hover { background: none; }
 .fam-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--fam-faint); }
 
 .fam-name {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  flex: 0 1 auto; min-width: 0;
 }
 .fam-name--dir { font-weight: 600; }
 .fam-name--root { font-weight: 650; font-size: 13px; }
 .fam-spacer { flex: 1 1 auto; min-width: 8px; }
 
+/* Truncates rather than squeezing the filename out of the row on narrow
+   containers — both it and .fam-name are shrinkable flex items. */
 .fam-inherit-tag {
   display: inline-flex; align-items: center; gap: 3px;
   font-size: 11px; color: var(--fam-faint); white-space: nowrap;
+  flex: 0 1 auto; min-width: 0; max-width: 45%;
+  overflow: hidden; text-overflow: ellipsis;
 }
+/* Visible by default: on touch there is no hover to reveal it with, so the
+   only way to clear an explicit rule would otherwise be unreachable. The
+   hover-to-reveal behaviour is re-applied for fine pointers further down. */
 .fam-revert {
   width: 22px; height: 22px; flex: none; border-radius: 6px;
   display: inline-flex; align-items: center; justify-content: center;
   border: none; background: none; cursor: pointer; color: var(--fam-faint);
-  opacity: 0; transition: opacity .12s ease, background .12s ease, color .12s ease;
+  opacity: 1; transition: opacity .12s ease, background .12s ease, color .12s ease;
 }
-.fam-row:hover .fam-revert, .fam-row:focus-within .fam-revert { opacity: 1; }
-.fam-revert:hover { background: var(--fam-surface-2); color: var(--fam-fg); }
 .fam-revert:focus-visible { opacity: 1; outline: none; box-shadow: 0 0 0 2px var(--fam-accent); }
 
 .fam-iconbtn {
@@ -209,10 +241,12 @@ const STYLE = `
   border: none; background: none; cursor: pointer; color: var(--fam-faint);
   transition: background .12s ease, color .12s ease;
 }
-.fam-iconbtn:hover { background: var(--fam-danger-bg); color: var(--fam-danger); }
 .fam-iconbtn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--fam-accent); }
 
-.fam-treemsg { padding: 4px 12px; color: var(--fam-faint); font-size: 12px; font-style: italic; }
+.fam-treemsg {
+  padding: 4px 12px; color: var(--fam-faint); font-size: 12px; font-style: italic;
+  padding-left: calc(6px + var(--fam-depth, 0) * var(--fam-indent) + 24px);
+}
 .fam-treemsg--err { color: var(--fam-danger); font-style: normal; }
 
 /* --- add-root --- */
@@ -235,7 +269,6 @@ const STYLE = `
   cursor: pointer;
   transition: background .14s ease, border-color .14s ease, transform .08s ease, opacity .14s ease;
 }
-.fam-btn:hover:not(:disabled) { background: var(--fam-surface-2); }
 .fam-btn:active:not(:disabled) { transform: scale(0.98); }
 .fam-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(37,99,235,0.35); }
 .fam-btn:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -243,15 +276,16 @@ const STYLE = `
   border-color: transparent; background: var(--fam-accent); color: #fff; font-weight: 600;
   box-shadow: 0 1px 2px rgba(0,0,0,0.12);
 }
-.fam-btn--primary:hover:not(:disabled) { background: var(--fam-accent); filter: brightness(1.08); }
 .fam-btn--ghost { border-color: transparent; color: var(--fam-muted); }
-.fam-btn--ghost:hover:not(:disabled) { background: var(--fam-surface-2); color: var(--fam-fg); }
-.fam-btn--danger:hover:not(:disabled) { border-color: var(--fam-danger-border); color: var(--fam-danger); background: var(--fam-danger-bg); }
+/* Truncated away on narrow containers — the profile list can be long enough to
+   blow out the primary button on its own. */
+.fam-btn-targets { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* --- action bar (full-bleed footer; parent has 16px padding) --- */
+/* --- action bar (full-bleed footer; bleeds by exactly the page padding) --- */
 .fam-actionbar {
   display: flex; align-items: center; gap: 10px;
-  margin: 16px -16px -16px; padding: 14px 16px;
+  margin: 16px calc(-1 * var(--fam-pad)) calc(-1 * var(--fam-pad));
+  padding: 14px var(--fam-pad);
   border-top: 1px solid var(--fam-border);
   background: var(--fam-surface);
 }
@@ -259,6 +293,7 @@ const STYLE = `
   display: inline-flex; align-items: center; gap: 6px;
   font-size: 12px; color: var(--fam-muted); margin-right: auto;
 }
+.fam-actionbar-gap { margin-right: auto; }
 .fam-dirty-dot::before {
   content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--fam-accent);
 }
@@ -298,7 +333,7 @@ const STYLE = `
 }
 .fam-state--ok { background: var(--fam-ok-bg); color: var(--fam-ok); }
 .fam-state--bad { background: var(--fam-danger-bg); color: var(--fam-danger); }
-.fam-step { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; padding: 2px 0; }
+.fam-step { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; padding: 2px 0; flex-wrap: wrap; }
 .fam-step-icon { width: 15px; flex: none; text-align: center; }
 .fam-step-detail { color: var(--fam-muted); font-size: 12px; }
 
@@ -309,9 +344,9 @@ const STYLE = `
   border: 1px solid var(--fam-border); border-radius: 9px; cursor: pointer;
   transition: border-color .14s ease, background .14s ease;
 }
-.fam-profile:hover { border-color: var(--fam-border-strong); background: var(--fam-row-hover); }
 .fam-profile--on { border-color: var(--fam-accent); background: rgba(37,99,235,0.06); }
 .fam-profile input { width: 16px; height: 16px; accent-color: var(--fam-accent); flex: none; }
+.fam-profile-home { opacity: 0.7; }
 .fam-badge {
   font-size: 10px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase;
   padding: 2px 7px; border-radius: 5px;
@@ -335,6 +370,82 @@ const STYLE = `
   animation: fam-spin .6s linear infinite;
 }
 @keyframes fam-spin { to { transform: rotate(360deg); } }
+
+/* ===========================================================================
+   AXIS 1 — INPUT MODALITY
+   =========================================================================== */
+
+/* Hover states only where hover exists. On touch, :hover latches after a tap
+   and leaves rows/buttons looking permanently focused. */
+@media (hover: hover) and (pointer: fine) {
+  .fam-disclosure-btn:hover { color: var(--fam-fg); }
+  .fam-perm:hover { border-color: var(--fam-border-strong); filter: brightness(1.03); }
+  .fam-perm--legend:hover { filter: none; }
+  .fam-row:hover { background: var(--fam-row-hover); }
+  .fam-caret:hover { background: var(--fam-surface-2); color: var(--fam-fg); }
+  .fam-caret--leaf:hover { background: none; }
+  .fam-revert { opacity: 0; }
+  .fam-row:hover .fam-revert, .fam-row:focus-within .fam-revert { opacity: 1; }
+  .fam-revert:hover { background: var(--fam-surface-2); color: var(--fam-fg); }
+  .fam-iconbtn:hover { background: var(--fam-danger-bg); color: var(--fam-danger); }
+  .fam-btn:hover:not(:disabled) { background: var(--fam-surface-2); }
+  .fam-btn--primary:hover:not(:disabled) { background: var(--fam-accent); filter: brightness(1.08); }
+  .fam-btn--ghost:hover:not(:disabled) { background: var(--fam-surface-2); color: var(--fam-fg); }
+  .fam-btn--danger:hover:not(:disabled) { border-color: var(--fam-danger-border); color: var(--fam-danger); background: var(--fam-danger-bg); }
+  .fam-profile:hover { border-color: var(--fam-border-strong); background: var(--fam-row-hover); }
+}
+
+/* Touch-sized targets. The desktop-dense 22-26px controls are well under the
+   44px minimum a finger needs; a mis-tap here changes a filesystem permission
+   or drops a root, so the extra row height is worth it. */
+@media (pointer: coarse) {
+  .fam-caret { width: 38px; height: 38px; }
+  .fam-revert, .fam-iconbtn { width: 36px; height: 36px; }
+  .fam-perm { height: 36px; min-width: 72px; font-size: 12.5px; }
+  .fam-perm--legend { height: 24px; min-width: 0; }
+  .fam-row { padding-top: 4px; padding-bottom: 4px; }
+  .fam-btn { height: 44px; padding: 0 16px; }
+  /* 16px is the threshold below which iOS Safari auto-zooms on focus. */
+  .fam-input { height: 44px; font-size: 16px; }
+  .fam-profile { padding: 12px; }
+  .fam-profile input { width: 20px; height: 20px; }
+  .fam-disclosure-btn { padding: 8px 0; }
+}
+
+/* ===========================================================================
+   AXIS 2 — AVAILABLE SPACE (container, not viewport)
+   =========================================================================== */
+
+@container fam (max-width: 640px) {
+  .fam-page { --fam-pad: 12px; --fam-indent: 10px; }
+  .fam-h1 { font-size: 17px; }
+  .fam-sub { margin-bottom: 12px; }
+  .fam-tree { border-radius: 8px; max-height: max(240px, 52vh); }
+  .fam-inherit-tag { max-width: 38%; }
+
+  /* Input over button rather than beside it — 180px min-width + a button does
+     not fit, and the input would collapse to unusable. */
+  .fam-addroot { flex-direction: column; }
+  .fam-addroot .fam-btn { width: 100%; }
+
+  /* Stack: status line, then the primary action full-width, then secondaries. */
+  .fam-actionbar { flex-wrap: wrap; row-gap: 10px; }
+  .fam-actionbar-gap { display: none; }
+  .fam-dirty-dot { order: 1; flex: 1 0 100%; margin-right: 0; }
+  /* Generic rule first: the primary button matches both selectors, so the
+     override has to come last to win at equal specificity. */
+  .fam-actionbar .fam-btn { order: 3; flex: 1 1 auto; }
+  .fam-actionbar .fam-btn--primary { order: 2; flex: 1 0 100%; }
+  .fam-btn-targets { display: none; }
+
+  /* Profile rows wrap, with the (long) Hermes home path on its own line. */
+  .fam-profile { flex-wrap: wrap; row-gap: 6px; }
+  .fam-profile .fam-spacer { display: none; }
+  .fam-profile-home { flex: 1 0 100%; word-break: break-all; }
+
+  .fam-step-detail { flex: 1 0 100%; padding-left: 23px; }
+  .fam-preview { max-height: 40vh; overflow: auto; }
+}
 `;
 
 /**
@@ -345,6 +456,25 @@ const STYLE = `
  */
 function FamStyles() {
   return <style dangerouslySetInnerHTML={{ __html: STYLE }} />;
+}
+
+/**
+ * Every entry point renders through this: `.fam-root` is the query container
+ * (it must stay unpadded — a container query can't match its own container),
+ * `.fam-page` carries the padding and max-width.
+ */
+function Shell({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="fam-root">
+      <FamStyles />
+      <div className="fam-page">{children}</div>
+    </div>
+  );
+}
+
+/** Tree indentation travels as a CSS variable so the step size is a token. */
+function depthVar(depth: number): React.CSSProperties {
+  return { "--fam-depth": depth } as React.CSSProperties;
 }
 
 // ---------------------------------------------------------------------------
@@ -516,13 +646,14 @@ function TreeNode(props: NodeShared & { entry: TreeEntry; depth: number }) {
 
   return (
     <div>
-      <div className={rowCls} style={{ paddingLeft: 6 + depth * 16 }}>
+      <div className={rowCls} style={depthVar(depth)}>
         {entry.isDir ? (
           <button
             type="button"
             className={`fam-caret${isOpen ? " fam-caret--open" : ""}`}
             onClick={() => toggle(entry.path)}
             aria-expanded={isOpen}
+            aria-label={`${isOpen ? "Collapse" : "Expand"} ${entry.name}`}
             title={isOpen ? "Collapse" : "Expand"}
           >
             <IconChevron />
@@ -544,6 +675,7 @@ function TreeNode(props: NodeShared & { entry: TreeEntry; depth: number }) {
             type="button"
             className="fam-revert"
             onClick={() => props.onClear(entry.path)}
+            aria-label={`Clear the explicit permission on ${entry.name}`}
             title="Clear this explicit setting — inherit from the parent"
           >
             <IconRevert />
@@ -567,7 +699,7 @@ function ChildList(props: NodeShared & { parentPath: string; depth: number }) {
     "list-dir",
     { path: props.parentPath, roots: props.roots },
   );
-  const indent = { paddingLeft: 6 + (props.depth + 1) * 16 + 24 } as const;
+  const indent = depthVar(props.depth + 1);
   if (loading)
     return <div className="fam-treemsg" style={indent}><span className="fam-spinner" style={{ display: "inline-block", width: 11, height: 11, color: "var(--fam-faint)", verticalAlign: "-1px", marginRight: 6 }} />Loading…</div>;
   if (error) return <div className="fam-treemsg fam-treemsg--err" style={indent}>{error.message}</div>;
@@ -676,24 +808,27 @@ function AccessEditor({
           const rowCls = ["fam-row", explicit ? "fam-row--configured" : "", explicit ? `fam-row--${eff.mode}` : ""].join(" ");
           return (
             <div key={root} className="fam-root-group">
-              <div className={rowCls} style={{ paddingLeft: 6 }}>
+              <div className={rowCls} style={depthVar(0)}>
                 <button
                   type="button"
                   className={`fam-caret${isOpen ? " fam-caret--open" : ""}`}
                   onClick={() => toggle(root)}
                   aria-expanded={isOpen}
+                  aria-label={`${isOpen ? "Collapse" : "Expand"} ${root}`}
                   title={isOpen ? "Collapse" : "Expand"}
                 >
                   <IconChevron />
                 </button>
                 <span className="fam-name fam-name--root">{root}</span>
                 <button type="button" className="fam-iconbtn" onClick={() => removeRoot(root)}
+                  aria-label={`Remove the root ${root} from the tree`}
                   title="Remove this root from the tree (does not change permissions)">
                   <IconClose />
                 </button>
                 <span className="fam-spacer" />
                 {explicit && (
                   <button type="button" className="fam-revert" onClick={() => clearMode(root)}
+                    aria-label={`Clear the explicit permission on ${root}`}
                     title="Clear this explicit setting — inherit from the parent">
                     <IconRevert />
                   </button>
@@ -770,7 +905,7 @@ function AccessEditor({
             {explicitCount} explicit {explicitCount === 1 ? "rule" : "rules"} · unsaved
           </span>
         )}
-        {!dirty && <span style={{ marginRight: "auto" }} />}
+        {!dirty && <span className="fam-actionbar-gap" />}
         <button type="button" className="fam-btn fam-btn--ghost fam-btn--danger"
           onClick={resetAll} disabled={saving || explicitCount === 0}
           title="Clear every explicit rule (revert all paths to the secure default)">
@@ -781,9 +916,10 @@ function AccessEditor({
         </button>
         <button type="button" className="fam-btn fam-btn--primary" onClick={handleSave} disabled={!dirty || saving}>
           {saving && <span className="fam-spinner" />}
-          {saving
-            ? "Applying…"
-            : `${isolated ? "Save & apply" : "Enable Docker isolation"} · ${targetLabels.join(", ")}`}
+          <span>{saving ? "Applying…" : isolated ? "Save & apply" : "Enable Docker isolation"}</span>
+          {/* Dropped on narrow containers — the joined profile list can be
+              arbitrarily long and would otherwise blow out the button. */}
+          {!saving && <span className="fam-btn-targets">· {targetLabels.join(", ")}</span>}
         </button>
       </div>
     </div>
@@ -849,8 +985,8 @@ export function FileAccessPage() {
   const { data, loading, error } = usePluginData<ProfilesResponse>("hermes-profiles", {});
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
-  if (loading) return <div className="fam-root" style={{ padding: 16 }}><FamStyles /><p className="fam-sub">Discovering Hermes profiles…</p></div>;
-  if (error) return <div className="fam-root" style={{ padding: 16 }}><FamStyles /><div className="fam-alert"><IconWarn />{error.message}</div></div>;
+  if (loading) return <Shell><p className="fam-sub">Discovering Hermes profiles…</p></Shell>;
+  if (error) return <Shell><div className="fam-alert"><IconWarn />{error.message}</div></Shell>;
 
   const profiles: ProfileSummary[] = data?.profiles ?? [];
   const targets = profiles.filter((p) => selected.has(p.name));
@@ -865,8 +1001,7 @@ export function FileAccessPage() {
     });
 
   return (
-    <div className="fam-root" style={{ padding: 16, maxWidth: 900 }}>
-      <FamStyles />
+    <Shell>
       <h2 className="fam-h1">File Access Manager</h2>
       <p className="fam-sub">OS-level filesystem isolation for each Hermes profile.</p>
       <HowItWorks />
@@ -886,7 +1021,7 @@ export function FileAccessPage() {
                 <ProfileBadge isMain={p.isMain} />
                 <BackendBadge backend={p.backend} />
                 <span className="fam-spacer" />
-                <code className="fam-code" style={{ opacity: 0.7 }}>{p.hermesHome}</code>
+                <code className="fam-code fam-profile-home">{p.hermesHome}</code>
               </label>
             ))}
           </div>
@@ -912,7 +1047,7 @@ export function FileAccessPage() {
           targetLabels={targets.map((t) => t.name)}
         />
       )}
-    </div>
+    </Shell>
   );
 }
 
@@ -927,9 +1062,7 @@ export function AgentFileAccessTab({ context }: PluginDetailTabProps) {
     isMain: boolean;
   }>("agent-profile", { companyId, agentId });
 
-  const shell = (children: React.ReactNode) => (
-    <div className="fam-root" style={{ padding: 16, maxWidth: 900 }}><FamStyles />{children}</div>
-  );
+  const shell = (children: React.ReactNode) => <Shell>{children}</Shell>;
 
   if (!companyId || !agentId) return shell(<p className="fam-sub">Missing agent context.</p>);
   if (loading) return shell(<p className="fam-sub">Resolving agent profile…</p>);
