@@ -193,6 +193,29 @@ export async function writeTerminalConfigYaml(
  * so the runtime-apply step recreates the container with the same runtime Hermes
  * uses (docker vs podman). Never returns file contents beyond the requested key.
  */
+/**
+ * Read the profile's EFFECTIVE terminal backend so the UI can show whether a
+ * profile is currently Docker-isolated or still on the (non-isolating) local
+ * backend. Precedence mirrors what actually runs: an explicit `.env`
+ * `TERMINAL_ENV` wins (it overrides the config bridge), else `config.yaml`
+ * `terminal.backend` (bridged into env at agent start), else null when neither
+ * is set — Hermes' own default, which the UI treats as not-yet-isolated. Reads
+ * only the single value it needs; never returns other file contents.
+ */
+export async function readTerminalBackend(hermesHome: string): Promise<string | null> {
+  const home = expandHome(hermesHome);
+  const envVal = await readEnvVar(home, TERMINAL_ENV_KEYS.backend);
+  if (envVal) return envVal;
+  const cfg = await readOrEmpty(path.join(home, "config.yaml"));
+  if (!cfg) return null;
+  try {
+    const backend = parseDocument(cfg).getIn(["terminal", "backend"]);
+    return typeof backend === "string" ? backend : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function readEnvVar(hermesHome: string, key: string): Promise<string | null> {
   const home = expandHome(hermesHome);
   const text = await readOrEmpty(path.join(home, ".env"));

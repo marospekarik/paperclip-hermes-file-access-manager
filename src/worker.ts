@@ -14,6 +14,7 @@ import {
 import {
   TERMINAL_ENV_KEYS,
   readEnvVar,
+  readTerminalBackend,
   writeEnvVars,
   writeTerminalConfigYaml,
 } from "./env-config.js";
@@ -38,7 +39,14 @@ const ENFORCEMENT_NOTE =
 
 const VALID_MODES = new Set<Mode>(["rw", "ro", "denied"]);
 
-export interface ProfileSummary extends HermesProfile {}
+export interface ProfileSummary extends HermesProfile {
+  /**
+   * Effective terminal backend on disk ("docker" = isolated by this plugin,
+   * "local"/other/null = not yet isolated). Drives the profile-picker status
+   * badge so a user can see which profiles are sandboxed before configuring.
+   */
+  backend: string | null;
+}
 
 export interface ProfileAccessResponse {
   profile: string;
@@ -50,6 +58,8 @@ export interface ProfileAccessResponse {
   assignments: Assignment[];
   /** Preview of the docker_volumes that these assignments generate. */
   volumesPreview: string[];
+  /** Effective backend on disk — lets the editor phrase Save as "Enable Docker isolation". */
+  backend: string | null;
   note: string;
 }
 
@@ -147,7 +157,13 @@ const plugin = definePlugin({
     // Discover every Hermes profile on the host at request time so the UI stays
     // in sync with the filesystem (profiles added/removed need no plugin change).
     ctx.data.register("hermes-profiles", async (): Promise<ProfilesResponse> => {
-      const profiles = await discoverProfiles();
+      const discovered = await discoverProfiles();
+      const profiles: ProfileSummary[] = await Promise.all(
+        discovered.map(async (p) => ({
+          ...p,
+          backend: await readTerminalBackend(p.hermesHome),
+        })),
+      );
       return { homeDir, profiles };
     });
 
@@ -199,6 +215,7 @@ const plugin = definePlugin({
         roots: stored.roots,
         assignments: stored.assignments,
         volumesPreview: generateDockerVolumes(stored.assignments, { maskDir }),
+        backend: await readTerminalBackend(profile.hermesHome),
         note: ENFORCEMENT_NOTE,
       };
     });

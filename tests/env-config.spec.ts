@@ -7,6 +7,7 @@ import {
   isWritableLocation,
   quoteEnvValue,
   readEnvVar,
+  readTerminalBackend,
   unquoteEnvValue,
   updateTerminalConfigYaml,
   upsertEnvVars,
@@ -156,6 +157,45 @@ describe("writeEnvVars (atomic, temp-dir)", () => {
     const line = txt.split("\n").find((l) => l.startsWith("TERMINAL_DOCKER_VOLUMES="))!;
     const raw = line.slice("TERMINAL_DOCKER_VOLUMES=".length);
     expect(JSON.parse(unquoteEnvValue(raw))).toEqual(["/a:/a"]);
+  });
+});
+
+describe("readTerminalBackend (effective backend for the status badge)", () => {
+  const dirs: string[] = [];
+  afterAll(async () => {
+    for (const d of dirs) await fs.rm(d, { recursive: true, force: true });
+  });
+
+  async function home(): Promise<string> {
+    const d = await fs.mkdtemp(path.join(os.tmpdir(), "fam-backend-"));
+    dirs.push(d);
+    return d;
+  }
+
+  test("null when neither .env nor config.yaml sets a backend", async () => {
+    expect(await readTerminalBackend(await home())).toBeNull();
+    const h = await home();
+    await fs.writeFile(path.join(h, "config.yaml"), "model:\n  x: 1\n");
+    expect(await readTerminalBackend(h)).toBeNull();
+  });
+
+  test("reads config.yaml terminal.backend when .env is absent", async () => {
+    const h = await home();
+    await fs.writeFile(path.join(h, "config.yaml"), "terminal:\n  backend: local\n");
+    expect(await readTerminalBackend(h)).toBe("local");
+  });
+
+  test(".env TERMINAL_ENV wins over config.yaml (matches runtime precedence)", async () => {
+    const h = await home();
+    await fs.writeFile(path.join(h, "config.yaml"), "terminal:\n  backend: local\n");
+    await fs.writeFile(path.join(h, ".env"), "TERMINAL_ENV=docker\n");
+    expect(await readTerminalBackend(h)).toBe("docker");
+  });
+
+  test("returns docker when only .env is set", async () => {
+    const h = await home();
+    await fs.writeFile(path.join(h, ".env"), "export TERMINAL_ENV=docker\n");
+    expect(await readTerminalBackend(h)).toBe("docker");
   });
 });
 

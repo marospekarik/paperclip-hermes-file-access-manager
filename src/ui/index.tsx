@@ -318,6 +318,15 @@ const STYLE = `
 }
 .fam-badge--main { background: var(--fam-danger-bg); color: var(--fam-danger); }
 .fam-badge--spec { background: var(--fam-ok-bg); color: var(--fam-ok); }
+.fam-badge--iso { background: var(--fam-rw-bg); color: var(--fam-rw); border: 1px solid var(--fam-rw-border); }
+.fam-badge--noiso { background: var(--fam-ro-bg); color: var(--fam-ro); border: 1px solid var(--fam-ro-border); }
+
+/* --- inline note (backend switch hint) --- */
+.fam-note {
+  margin: 10px 0 0; padding: 8px 11px; border-radius: 8px;
+  background: var(--fam-surface); border: 1px solid var(--fam-border);
+  color: var(--fam-muted); font-size: 12px; line-height: 1.5;
+}
 
 /* --- spinner --- */
 .fam-spinner {
@@ -429,7 +438,7 @@ function Legend() {
 // Apply progress / report
 // ---------------------------------------------------------------------------
 
-const APPLY_PHASES = ["Write profile config", "Recreate Docker container", "Restart Hermes gateway"];
+const APPLY_PHASES = ["Write profile config", "Check Docker access", "Recreate Docker container", "Restart Hermes gateway"];
 const STEP_ICON: Record<string, string> = { ok: "✓", skipped: "–", failed: "✕", running: "" };
 
 function ApplyProgress() {
@@ -627,6 +636,7 @@ function AccessEditor({
   // staged as a draft so Discard still restores the last-saved state.
   const resetAll = () => setDraft([]);
 
+  const isolated = data.backend === "docker";
   const preview = generateDockerVolumes(assignments, { maskDir: data.maskDir });
   const grantCount = assignments.filter((a) => a.mode === "rw" || a.mode === "ro").length;
   const explicitCount = assignments.length;
@@ -741,6 +751,15 @@ function AccessEditor({
         </div>
       )}
 
+      {!isolated && (
+        <div className="fam-note">
+          {targetLabels.length > 1 ? "These profiles are" : "This profile is"} not sandboxed yet
+          (backend <code className="fam-code">{data.backend ?? "default"}</code>). Saving switches{" "}
+          {targetLabels.length > 1 ? "them" : "it"} to Hermes' Docker terminal backend so the mounts
+          take effect. Docker or Podman must be reachable by the gateway — see the apply report below.
+        </div>
+      )}
+
       {!saving && applyReport && <ApplyReport results={applyReport} />}
       {saving && <ApplyProgress />}
       {saveError && <div className="fam-alert"><IconWarn />{saveError}</div>}
@@ -762,7 +781,9 @@ function AccessEditor({
         </button>
         <button type="button" className="fam-btn fam-btn--primary" onClick={handleSave} disabled={!dirty || saving}>
           {saving && <span className="fam-spinner" />}
-          {saving ? "Applying…" : `Save & apply to ${targetLabels.join(", ")}`}
+          {saving
+            ? "Applying…"
+            : `${isolated ? "Save & apply" : "Enable Docker isolation"} · ${targetLabels.join(", ")}`}
         </button>
       </div>
     </div>
@@ -777,6 +798,23 @@ function ProfileBadge({ isMain }: { isMain: boolean }) {
   return (
     <span className={`fam-badge ${isMain ? "fam-badge--main" : "fam-badge--spec"}`}>
       {isMain ? "router / default" : "specialized"}
+    </span>
+  );
+}
+
+/** Shows whether a profile currently runs the Docker (isolated) backend. */
+function BackendBadge({ backend }: { backend: string | null }) {
+  const isolated = backend === "docker";
+  return (
+    <span
+      className={`fam-badge ${isolated ? "fam-badge--iso" : "fam-badge--noiso"}`}
+      title={
+        isolated
+          ? "Runs the Docker terminal backend — file access is sandboxed."
+          : `Runs the ${backend ?? "default"} backend — not sandboxed. Saving switches it to Docker isolation.`
+      }
+    >
+      {isolated ? "Docker · isolated" : "not isolated"}
     </span>
   );
 }
@@ -846,6 +884,7 @@ export function FileAccessPage() {
                 <input type="checkbox" checked={selected.has(p.name)} onChange={() => toggle(p.name)} />
                 <span className="fam-name" style={{ fontWeight: 600 }}>{p.name}</span>
                 <ProfileBadge isMain={p.isMain} />
+                <BackendBadge backend={p.backend} />
                 <span className="fam-spacer" />
                 <code className="fam-code" style={{ opacity: 0.7 }}>{p.hermesHome}</code>
               </label>

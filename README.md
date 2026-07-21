@@ -41,7 +41,9 @@ Prerequisites:
 - **`PAPERCLIP_API_KEY`** — a board API key with `instance_admin` role, already
   exported in your shell. The CLI reads it from the environment only — never
   pass it on a command line or paste it into a file.
-- **Docker or Podman** — needed for enforcement at runtime, not for install.
+- **Docker or Podman** — needed for enforcement at runtime, not for install. See
+  [Docker access](#docker-access) below: the runtime user must be able to reach
+  the container socket, or applying a profile will report `needs attention`.
 
 ```bash
 git clone https://github.com/marospekarik/file-access-manager.git
@@ -49,6 +51,38 @@ cd file-access-manager
 bun install && bun run build
 paperclipai plugin install --local "$PWD"
 ```
+
+### Docker access
+
+Enforcement runs the Hermes gateway's terminal backend inside a container, so the
+**gateway process must be able to reach the Docker (or Podman) socket**. On Linux
+that means the account the gateway runs as is in the `docker` group:
+
+```bash
+sudo usermod -aG docker "$USER"
+```
+
+**Then restart your login session — not just the gateway.** Group membership is
+captured when a session starts, so a gateway launched by an already-running
+`systemd --user` manager keeps the *old* groups and still can't reach the socket.
+Restarting the gateway unit re-forks it from the same manager, so it inherits the
+same stale set. Refresh the whole user session instead:
+
+```bash
+sudo systemctl restart "user@$(id -u).service"   # or simply log out and back in
+```
+
+Verify from the same session the gateway runs under:
+
+```bash
+docker run --rm hello-world
+```
+
+If a save reports **`needs attention`** with a "permission denied … Docker daemon
+socket" step, this is the cause — the plugin detects it and prints these steps.
+**Rootless Docker or [Podman](https://podman.io) need no `docker` group at all**
+and sidestep this entirely; point Hermes at Podman with
+`HERMES_DOCKER_BINARY=podman` in the profile's `.env`.
 
 Verify:
 

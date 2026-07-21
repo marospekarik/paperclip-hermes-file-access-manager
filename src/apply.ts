@@ -93,6 +93,80 @@ function runtimeLabel(binary: string): string {
 }
 
 /**
+ * Detect the docker-group / socket-permission failure and turn the raw daemon
+ * error into an actionable message. This is the class of failure behind the
+ * "had to `sudo systemctl restart user@1000.service`" incident: a user added to
+ * the `docker` group AFTER their login session started keeps the old group set,
+ * so every process spawned by the systemd --user manager (the Hermes gateway)
+ * and by pm2 (this worker) is denied the socket until the LOGIN SESSION — not
+ * just the gateway — restarts. Returns guidance text, or null when the stderr is
+ * not a socket-permission problem. The message is deliberate about why a plain
+ * gateway restart is not enough (a --user restart re-forks with the same stale
+ * group set) and points at rootless Docker / Podman, which need no group at all.
+ */
+export function dockerPermissionHint(stderr: string): string | null {
+  const s = stderr.toLowerCase();
+  const isPermission = s.includes("permission denied") || s.includes("got permission denied");
+  const isSocket =
+    s.includes("docker.sock") ||
+    s.includes("daemon socket") ||
+    s.includes("/var/run/docker") ||
+    s.includes("connect to the docker daemon");
+  if (isPermission && isSocket) {
+    return (
+      "Permission denied on the container socket. Your user is not in the 'docker' " +
+      "group, or a running session has not picked the group up yet. Add it " +
+      "(sudo usermod -aG docker $USER), then restart your LOGIN SESSION " +
+      "(sudo systemctl restart user@$(id -u).service, or log out and back in) so " +
+      "the gateway inherits the group — restarting the gateway alone does NOT " +
+      "refresh it. Rootless Docker or Podman avoids the group entirely."
+    );
+  }
+  return null;
+}
+
+/**
+ * Probe that the container runtime is installed AND reachable with the current
+ * process's permissions, classifying a socket-permission denial into actionable
+ * guidance (see dockerPermissionHint). Runs before the container recreate so the
+ * common first-time failure (Docker installed, user not in the group / not
+ * re-logged-in) is reported once, clearly, instead of as a raw daemon error.
+ *
+ * Caveat this cannot escape: it probes THIS process's socket access, which is a
+ * strong but imperfect proxy for the gateway's — they are distinct processes and
+ * could have been started at different times relative to a group change. It
+ * reliably catches the dominant "nothing was restarted after adding the group"
+ * case, where both are stale.
+ */
+export async function dockerReachableStep(
+  run: RunCommand = runCommand,
+  binary = "docker",
+): Promise<ApplyStep> {
+  const key = "preflight";
+  const rt = runtimeLabel(binary);
+  const label = `Check ${rt} access`;
+  const info = await run(binary, ["info", "--format", "{{.ServerVersion}}"]);
+  if (info.errno === "ENOENT") {
+    return {
+      key,
+      label,
+      status: "skipped",
+      detail: `${rt} CLI (${binary}) not installed — install it before agents on this profile can use the sandbox.`,
+    };
+  }
+  if (!info.ok) {
+    const hint = dockerPermissionHint(info.stderr);
+    return {
+      key,
+      label,
+      status: "failed",
+      detail: hint ?? `${binary} info failed: ${info.stderr.trim() || `exit ${info.code}`}`,
+    };
+  }
+  return { key, label, status: "ok", detail: `${rt} daemon reachable.` };
+}
+
+/**
  * Remove the profile's persistent Hermes container(s) so the next tool call
  * recreates one with the new mounts. Best-effort: absent runtime CLI or no
  * matching container is a "skipped"/"ok", never a failure. `binary` is the
@@ -115,7 +189,8 @@ export async function recreateContainerStep(
     return { key, label, status: "skipped", detail: `${rt} CLI (${binary}) not available on the host — skipped.` };
   }
   if (!list.ok) {
-    return { key, label, status: "failed", detail: `${binary} ps failed: ${list.stderr.trim() || `exit ${list.code}`}` };
+    const hint = dockerPermissionHint(list.stderr);
+    return { key, label, status: "failed", detail: hint ?? `${binary} ps failed: ${list.stderr.trim() || `exit ${list.code}`}` };
   }
   const ids = list.stdout.split("\n").map((s) => s.trim()).filter(Boolean);
   if (ids.length === 0) {
@@ -123,7 +198,8 @@ export async function recreateContainerStep(
   }
   const rm = await run(binary, ["rm", "-f", ...ids], 60_000);
   if (!rm.ok) {
-    return { key, label, status: "failed", detail: `${binary} rm -f failed: ${rm.stderr.trim() || `exit ${rm.code}`}` };
+    const hint = dockerPermissionHint(rm.stderr);
+    return { key, label, status: "failed", detail: hint ?? `${binary} rm -f failed: ${rm.stderr.trim() || `exit ${rm.code}`}` };
   }
   return { key, label, status: "ok", detail: `Removed ${ids.length} stale container(s); new mounts apply on next use.` };
 }
@@ -204,7 +280,23 @@ export async function applyRuntime(
   binary = "docker",
 ): Promise<ApplyStep[]> {
   const steps: ApplyStep[] = [];
-  steps.push(await recreateContainerStep(profileLabelValue(profile), run, binary));
+  const preflight = await dockerReachableStep(run, binary);
+  steps.push(preflight);
+  if (preflight.status === "failed") {
+    // The runtime is installed but unreachable (almost always the docker-group
+    // socket-permission case). Recreating the container would just fail again
+    // with the same error — skip it. The gateway restart still runs: it is a
+    // systemd operation independent of container-socket access, and the fresh
+    // container is created on the next tool call once access is fixed.
+    steps.push({
+      key: "docker",
+      label: `Recreate ${runtimeLabel(binary)} container`,
+      status: "skipped",
+      detail: "Skipped — resolve the container-runtime access reported above first.",
+    });
+  } else {
+    steps.push(await recreateContainerStep(profileLabelValue(profile), run, binary));
+  }
   steps.push(await restartGatewayStep(profile.hermesHome, run, opts));
   return steps;
 }
