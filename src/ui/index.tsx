@@ -51,7 +51,9 @@ function nextMode(current: Mode): Mode {
 // ---------------------------------------------------------------------------
 // Namespaced stylesheet. Inline styles can't express :hover / :focus-visible /
 // :active / transitions, so all interaction states live here under `fam-*`
-// classes. Tokens adapt to the host's light/dark theme via prefers-color-scheme.
+// classes. Tokens adapt to the host's light/dark theme via the host's own `.dark`
+// class on <html> — never via prefers-color-scheme, which tracks the OS and can
+// disagree with the host theme (see the theme-switch note above `.dark .fam-root`).
 //
 // Responsive strategy — two independent axes, deliberately not conflated:
 //
@@ -77,7 +79,7 @@ const STYLE = `
   container-name: fam;
   --fam-pad: 16px;
   --fam-indent: 16px;
-  --fam-fg: #1a1d21;
+  --fam-fg: var(--foreground, #1a1d21);
   --fam-muted: #4b5563;
   --fam-faint: #6b7280;
   --fam-border: rgba(0,0,0,0.10);
@@ -96,23 +98,27 @@ const STYLE = `
   font-size: 13px;
   line-height: 1.5;
 }
-@media (prefers-color-scheme: dark) {
-  .fam-root {
-    --fam-fg: #e7e9ec;
-    --fam-muted: #b6bcc4;
-    --fam-faint: #8b9199;
-    --fam-border: rgba(255,255,255,0.12);
-    --fam-border-strong: rgba(255,255,255,0.24);
-    --fam-row-hover: rgba(255,255,255,0.055);
-    --fam-surface: rgba(255,255,255,0.035);
-    --fam-surface-2: rgba(255,255,255,0.06);
-    --fam-accent: #60a5fa;
-    --fam-rw: #4ade80;   --fam-rw-bg: rgba(74,222,128,0.15);   --fam-rw-border: rgba(74,222,128,0.45);
-    --fam-ro: #fbbf24;   --fam-ro-bg: rgba(251,191,36,0.15);   --fam-ro-border: rgba(251,191,36,0.45);
-    --fam-den: #94a3b8;  --fam-den-bg: rgba(148,163,184,0.14); --fam-den-border: rgba(148,163,184,0.4);
-    --fam-danger: #f87171; --fam-danger-bg: rgba(248,113,113,0.12); --fam-danger-border: rgba(248,113,113,0.4);
-    --fam-ok: #4ade80;   --fam-ok-bg: rgba(74,222,128,0.15);
-  }
+/* Theme switch follows the HOST, not the OS. Paperclip is a shadcn/Tailwind app
+   that toggles themes with a \`.dark\` class on <html> and defines no
+   \`prefers-color-scheme\` rules at all. Keying off the OS preference instead
+   meant a light-OS/dark-host session rendered near-black text on the host's
+   near-black background — unreadable. \`--fam-fg\` also defers to the host's own
+   \`--foreground\` so our body text can never drift from the surrounding UI. */
+.dark .fam-root {
+  --fam-fg: var(--foreground, #e7e9ec);
+  --fam-muted: #b6bcc4;
+  --fam-faint: #8b9199;
+  --fam-border: rgba(255,255,255,0.12);
+  --fam-border-strong: rgba(255,255,255,0.24);
+  --fam-row-hover: rgba(255,255,255,0.055);
+  --fam-surface: rgba(255,255,255,0.035);
+  --fam-surface-2: rgba(255,255,255,0.06);
+  --fam-accent: #60a5fa;
+  --fam-rw: #4ade80;   --fam-rw-bg: rgba(74,222,128,0.15);   --fam-rw-border: rgba(74,222,128,0.45);
+  --fam-ro: #fbbf24;   --fam-ro-bg: rgba(251,191,36,0.15);   --fam-ro-border: rgba(251,191,36,0.45);
+  --fam-den: #94a3b8;  --fam-den-bg: rgba(148,163,184,0.14); --fam-den-border: rgba(148,163,184,0.4);
+  --fam-danger: #f87171; --fam-danger-bg: rgba(248,113,113,0.12); --fam-danger-border: rgba(248,113,113,0.4);
+  --fam-ok: #4ade80;   --fam-ok-bg: rgba(74,222,128,0.15);
 }
 
 .fam-root * { box-sizing: border-box; }
