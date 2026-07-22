@@ -19,7 +19,7 @@ import {
   writeTerminalConfigYaml,
 } from "./env-config.js";
 import { defaultRoots, listDir } from "./fs-tree.js";
-import { isHermesAdapter, resolveProfileName } from "./hermes.js";
+import { type ProfileSource, isHermesAdapter, resolveAgentProfile } from "./hermes.js";
 import { type ApplyStep, applyRuntime, overallState, resolveDockerBinary } from "./apply.js";
 import {
   type HermesProfile,
@@ -38,6 +38,13 @@ const ENFORCEMENT_NOTE =
   "those tools unable to reach the host filesystem — grant the paths the agent needs.";
 
 const VALID_MODES = new Set<Mode>(["rw", "ro", "denied"]);
+
+/**
+ * Upper bound for the agent roster behind the route sidebar. A Paperclip
+ * company with more agents than this is well past the point where a flat
+ * sidebar list is the right UI, so truncating is preferable to paging.
+ */
+const AGENT_LIST_LIMIT = 200;
 
 export interface ProfileSummary extends HermesProfile {
   /**
@@ -66,6 +73,44 @@ export interface ProfileAccessResponse {
 export interface ProfilesResponse {
   homeDir: string;
   profiles: ProfileSummary[];
+}
+
+/** One Hermes-backed agent and the profile it resolves to. */
+export interface HermesAgentSummary {
+  agentId: string;
+  agentName: string;
+  adapterType: string;
+  /** null when the agent's HERMES_HOME matches no profile on disk. */
+  profile: string | null;
+  isMain: boolean;
+  /** Which adapterConfig signal decided the profile (see hermes.ts). */
+  profileSource: ProfileSource;
+  /** The resolved HERMES_HOME — the only useful detail when `profile` is null. */
+  hermesHome: string;
+  /** `adapterConfig.profile`: declared in Paperclip, but not read by the adapter. */
+  declaredProfile: string | null;
+  /** True when `declaredProfile` disagrees with the effective `profile`. */
+  declaredMismatch: boolean;
+}
+
+/**
+ * One agent resolved for a single-agent view. Adds `configurable` to the
+ * summary: false means the agent does not run on Hermes at all, which is a
+ * different failure from "runs on Hermes but its HERMES_HOME matched nothing".
+ */
+export interface AgentProfileResponse extends HermesAgentSummary {
+  configurable: boolean;
+}
+
+export interface HermesAgentsResponse {
+  agents: HermesAgentSummary[];
+  /**
+   * Agents in the company running a non-Hermes adapter. Reported rather than
+   * silently dropped so "where is my agent?" has an answer in the UI.
+   */
+  hiddenNonHermes: number;
+  /** True when the company has more agents than one page of the roster. */
+  truncated: boolean;
 }
 
 export interface ProfileApplyResult {
@@ -170,7 +215,7 @@ const plugin = definePlugin({
     // Map a Paperclip agent to the profile it runs on (for the agent detail tab).
     // Never falls back to main: an unmatched agent returns profile: null so the
     // UI can warn instead of silently configuring the router/default profile.
-    ctx.data.register("agent-profile", async (params) => {
+    ctx.data.register("agent-profile", async (params): Promise<AgentProfileResponse> => {
       const p = params as { companyId?: unknown; agentId?: unknown };
       const companyId = requireString(p.companyId, "companyId");
       const agentId = requireString(p.agentId, "agentId");
@@ -178,16 +223,59 @@ const plugin = definePlugin({
       if (!agent) throw new Error(`Agent not found: ${agentId}`);
       const configurable = isHermesAdapter(agent.adapterType);
       const profiles = await discoverProfiles();
-      const profile = configurable
-        ? resolveProfileName(agent.adapterConfig, profiles)
+      const resolved = configurable
+        ? await resolveAgentProfile(agent.adapterConfig, profiles)
         : null;
       return {
         agentId: agent.id,
         agentName: agent.name,
         adapterType: agent.adapterType,
         configurable,
-        profile,
-        isMain: profile === MAIN_PROFILE_NAME,
+        profile: resolved?.profile ?? null,
+        isMain: resolved?.profile === MAIN_PROFILE_NAME,
+        profileSource: resolved?.source ?? "default",
+        hermesHome: resolved?.hermesHome ?? "",
+        declaredProfile: resolved?.declaredProfile ?? null,
+        declaredMismatch: resolved?.declaredMismatch ?? false,
+      };
+    });
+
+    // Every Hermes-backed agent in the company, each mapped to the profile it
+    // runs on. Powers the agent picker. Non-Hermes adapters are dropped here
+    // rather than in the UI, so the picker never offers an agent that has no
+    // Docker terminal backend to isolate — but they are counted, so the UI can
+    // say how many were hidden instead of showing a bare "no agents". Agents
+    // whose HERMES_HOME matches no profile are kept with profile: null: a
+    // mis-set profile is worth seeing, not hiding.
+    ctx.data.register("hermes-agents", async (params): Promise<HermesAgentsResponse> => {
+      const companyId = requireString((params as { companyId?: unknown }).companyId, "companyId");
+      const [all, profiles] = await Promise.all([
+        ctx.agents.list({ companyId, limit: AGENT_LIST_LIMIT }),
+        discoverProfiles(),
+      ]);
+      const hermesAgents = all.filter((a) => isHermesAdapter(a.adapterType));
+      const agents = (
+        await Promise.all(
+          hermesAgents.map(async (a) => {
+            const r = await resolveAgentProfile(a.adapterConfig, profiles);
+            return {
+              agentId: a.id,
+              agentName: a.name,
+              adapterType: a.adapterType,
+              profile: r.profile,
+              isMain: r.profile === MAIN_PROFILE_NAME,
+              profileSource: r.source,
+              hermesHome: r.hermesHome,
+              declaredProfile: r.declaredProfile,
+              declaredMismatch: r.declaredMismatch,
+            };
+          }),
+        )
+      ).sort((a, b) => a.agentName.localeCompare(b.agentName));
+      return {
+        agents,
+        hiddenNonHermes: all.length - hermesAgents.length,
+        truncated: all.length >= AGENT_LIST_LIMIT,
       };
     });
 

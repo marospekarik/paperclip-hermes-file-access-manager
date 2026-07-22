@@ -1,9 +1,15 @@
 import React, { useMemo, useState } from "react";
 import {
+  useHostLocation,
+  useHostNavigation,
   usePluginAction,
   usePluginData,
 } from "@paperclipai/plugin-sdk/ui";
-import type { PluginDetailTabProps } from "@paperclipai/plugin-sdk/ui";
+import type {
+  PluginDetailTabProps,
+  PluginPageProps,
+} from "@paperclipai/plugin-sdk/ui";
+import { PAGE_ROUTE, agentIdFromSearch, isPluginRoute, pageHref } from "../routes.js";
 import {
   type Assignment,
   type Mode,
@@ -11,6 +17,9 @@ import {
   resolveEffectiveMode,
 } from "../model.js";
 import type {
+  AgentProfileResponse,
+  HermesAgentsResponse,
+  HermesAgentSummary,
   ProfileAccessResponse,
   ProfileApplyResult,
   ProfilesResponse,
@@ -356,6 +365,28 @@ const STYLE = `
 .fam-badge--iso { background: var(--fam-rw-bg); color: var(--fam-rw); border: 1px solid var(--fam-rw-border); }
 .fam-badge--noiso { background: var(--fam-ro-bg); color: var(--fam-ro); border: 1px solid var(--fam-ro-border); }
 
+/* --- agent picker (plugin page route) ---
+   Horizontal scroller on narrow containers, wrapping row when there is room.
+   Chips are anchors: each one is a real URL, so back/forward and copy-link work. */
+.fam-picker {
+  display: flex; gap: 6px; margin: 4px 0 14px;
+  overflow-x: auto; padding-bottom: 4px;
+  scrollbar-width: thin;
+}
+.fam-pick {
+  display: flex; flex-direction: column; gap: 1px; flex: none;
+  padding: 7px 12px; border-radius: 9px; text-decoration: none;
+  border: 1px solid var(--fam-border); background: var(--fam-surface);
+  color: inherit; transition: border-color .14s ease, background .14s ease;
+}
+.fam-pick:hover { border-color: var(--fam-accent); }
+.fam-pick--on { border-color: var(--fam-accent); background: rgba(37,99,235,0.06); }
+.fam-pick-name { font-size: 13px; font-weight: 600; white-space: nowrap; }
+.fam-pick-detail { font-size: 11px; color: var(--fam-muted); white-space: nowrap; }
+@container (min-width: 640px) {
+  .fam-picker { flex-wrap: wrap; overflow-x: visible; }
+}
+
 /* --- inline note (backend switch hint) --- */
 .fam-note {
   margin: 10px 0 0; padding: 8px 11px; border-radius: 8px;
@@ -500,6 +531,8 @@ const IconRevert = ({ size = 14 }: IconProps) =>
 const IconClose = ({ size = 14 }: IconProps) => svg(size, <><path d="M6 6l12 12" /><path d="M18 6 6 18" /></>);
 const IconWarn = ({ size = 16 }: IconProps) =>
   svg(size, <><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" /><path d="M12 9v4" /><path d="M12 17h.01" /></>);
+const IconFolderLock = ({ size = 16 }: IconProps) =>
+  svg(size, <><path d="M3 8V6a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.7.9L11.6 6H19a2 2 0 0 1 2 2v1" /><rect x="10" y="13" width="11" height="7" rx="1.5" /><path d="M13.5 13v-1.8a2.5 2.5 0 0 1 5 0V13" /><path d="M7 20H5a2 2 0 0 1-2-2v-6" /></>);
 
 function ModeIcon({ mode }: { mode: Mode }) {
   if (mode === "rw") return <IconPencil />;
@@ -981,12 +1014,16 @@ function HowItWorks() {
   );
 }
 
-export function FileAccessPage() {
+/**
+ * Profile-oriented editor body, without a Shell or page heading. Shared by the
+ * company settings page and the plugin page route's unscoped view.
+ */
+function ProfilePicker() {
   const { data, loading, error } = usePluginData<ProfilesResponse>("hermes-profiles", {});
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
-  if (loading) return <Shell><p className="fam-sub">Discovering Hermes profiles…</p></Shell>;
-  if (error) return <Shell><div className="fam-alert"><IconWarn />{error.message}</div></Shell>;
+  if (loading) return <p className="fam-sub">Discovering Hermes profiles…</p>;
+  if (error) return <div className="fam-alert"><IconWarn />{error.message}</div>;
 
   const profiles: ProfileSummary[] = data?.profiles ?? [];
   const targets = profiles.filter((p) => selected.has(p.name));
@@ -1001,9 +1038,7 @@ export function FileAccessPage() {
     });
 
   return (
-    <Shell>
-      <h2 className="fam-h1">File Access Manager</h2>
-      <p className="fam-sub">OS-level filesystem isolation for each Hermes profile.</p>
+    <>
       <HowItWorks />
 
       {profiles.length === 0 ? (
@@ -1047,52 +1082,83 @@ export function FileAccessPage() {
           targetLabels={targets.map((t) => t.name)}
         />
       )}
+    </>
+  );
+}
+
+export function FileAccessPage() {
+  return (
+    <Shell>
+      <h2 className="fam-h1">File Access Manager</h2>
+      <p className="fam-sub">OS-level filesystem isolation for each Hermes profile.</p>
+      <ProfilePicker />
     </Shell>
   );
 }
 
-export function AgentFileAccessTab({ context }: PluginDetailTabProps) {
-  const companyId = context.companyId ?? "";
-  const agentId = context.entityId ?? "";
-  const { data, loading, error } = usePluginData<{
-    agentName: string;
-    adapterType: string;
-    configurable: boolean;
-    profile: string | null;
-    isMain: boolean;
-  }>("agent-profile", { companyId, agentId });
+/**
+ * Single-agent editor body, without a Shell. Shared by the (currently inert)
+ * agent detail tab and the plugin page route, so both surfaces resolve the
+ * agent the same way and cannot drift apart.
+ *
+ * Both ids are required non-empty by the caller — `usePluginData` has no
+ * `enabled` flag, so guarding has to happen before this component mounts.
+ */
+/**
+ * Plain-English name for the adapter-config signal that decided an agent's
+ * profile. Mirrors Hermes's own resolution order (see `hermes.ts`) so the UI can
+ * say *why* an agent landed where it did rather than just asserting it.
+ */
+function profileSourceLabel(source: AgentProfileResponse["profileSource"]): string {
+  switch (source) {
+    case "extra-args":
+      return "from -p in extraArgs";
+    case "hermes-command":
+      return "from -p in the hermesCommand wrapper";
+    case "env":
+      return "from env.HERMES_HOME";
+    case "active-profile":
+      return "from the active_profile file";
+    default:
+      return "no profile selected in the adapter config";
+  }
+}
 
-  const shell = (children: React.ReactNode) => <Shell>{children}</Shell>;
+function AgentAccessView({ companyId, agentId }: { companyId: string; agentId: string }) {
+  const { data, loading, error } = usePluginData<AgentProfileResponse>(
+    "agent-profile",
+    { companyId, agentId },
+  );
 
-  if (!companyId || !agentId) return shell(<p className="fam-sub">Missing agent context.</p>);
-  if (loading) return shell(<p className="fam-sub">Resolving agent profile…</p>);
-  if (error) return shell(<div className="fam-alert"><IconWarn />{error.message}</div>);
+  if (loading) return <p className="fam-sub">Resolving agent profile…</p>;
+  if (error) return <div className="fam-alert"><IconWarn />{error.message}</div>;
   if (!data) return null;
 
   if (!data.configurable) {
-    return shell(
+    return (
       <p className="fam-sub">
         <strong>{data.agentName}</strong> uses the <code className="fam-code">{data.adapterType}</code>{" "}
         adapter — it does not run on Hermes, so there is no Docker terminal backend to isolate here.
-      </p>,
+      </p>
     );
   }
 
   if (!data.profile) {
-    return shell(
+    return (
       <div className="fam-alert">
         <IconWarn />
         <span>
-          <strong>{data.agentName}</strong>&apos;s HERMES_HOME does not match any profile under{" "}
-          <code className="fam-code">~/.hermes/profiles</code>. Configure it from the company-level{" "}
+          <strong>{data.agentName}</strong> resolves to{" "}
+          <code className="fam-code">{data.hermesHome}</code> ({profileSourceLabel(data.profileSource)}),
+          which is not a profile on this host. Configure it from the company-level{" "}
           <strong>File Access</strong> page instead of guessing — this avoids writing to the
           router/default profile by accident.
         </span>
-      </div>,
+      </div>
     );
   }
 
-  return shell(
+  return (
     <>
       <h3 className="fam-h1" style={{ fontSize: 16 }}>
         File access — {data.agentName}{" "}
@@ -1104,11 +1170,185 @@ export function AgentFileAccessTab({ context }: PluginDetailTabProps) {
       {data.isMain && (
         <div className="fam-alert">
           <IconWarn />
-          <span>This agent runs on the <strong>router / default</strong> profile. Changes here affect every agent on it.</span>
+          <span>
+            This agent runs on the <strong>router / default</strong> profile
+            {data.profileSource === "default" && " — nothing in its adapter config selects one"}.
+            Changes here affect every agent on it.
+          </span>
+        </div>
+      )}
+      {data.declaredMismatch && (
+        <div className="fam-alert">
+          <IconWarn />
+          <span>
+            This agent&apos;s Paperclip config declares profile{" "}
+            <code className="fam-code">{data.declaredProfile}</code>, but it actually runs on{" "}
+            <code className="fam-code">{data.profile}</code> ({profileSourceLabel(data.profileSource)}).
+            The Hermes adapter ignores the <code className="fam-code">profile</code> field, so the
+            effective profile is the one shown here — fix the declared value to avoid confusion.
+          </span>
         </div>
       )}
       <HowItWorks />
       <AccessEditor primary={data.profile} targets={[data.profile]} targetLabels={[data.profile]} />
-    </>,
+    </>
+  );
+}
+
+export function AgentFileAccessTab({ context }: PluginDetailTabProps) {
+  const companyId = context.companyId ?? "";
+  const agentId = context.entityId ?? "";
+  if (!companyId || !agentId) {
+    return <Shell><p className="fam-sub">Missing agent context.</p></Shell>;
+  }
+  return <Shell><AgentAccessView companyId={companyId} agentId={agentId} /></Shell>;
+}
+
+// ---------------------------------------------------------------------------
+// Sidebar nav entry + plugin page route
+//
+// The host mounts `sidebar` slots at the bottom of the "Work" group and
+// resolves `page` + `routeSidebar` as a pair keyed on a shared routePath.
+// Selection travels in the URL (`?agent=<id>`) rather than component state so
+// the sidebar and the content pane — which the host renders as siblings, not
+// as parent and child — stay in sync, and so a view is linkable.
+// ---------------------------------------------------------------------------
+
+/** True while the host is on our plugin page route. Route shape: `../routes.ts`. */
+function useOnPluginRoute(): boolean {
+  const { pathname } = useHostLocation();
+  return useMemo(() => isPluginRoute(pathname), [pathname]);
+}
+
+function useSelectedAgentId(): string | null {
+  const { search } = useHostLocation();
+  return useMemo(() => agentIdFromSearch(search), [search]);
+}
+
+export function FileAccessNavItem() {
+  const nav = useHostNavigation();
+  const active = useOnPluginRoute();
+  return (
+    <a
+      {...nav.linkProps(pageHref())}
+      aria-current={active ? "page" : undefined}
+      className={
+        "flex items-center gap-2.5 mx-2 rounded-lg px-2 py-1.5 pointer-coarse:py-1 transition-colors " +
+        (active
+          ? "bg-accent text-foreground"
+          : "text-foreground/80 hover:bg-accent/50 hover:text-foreground")
+      }
+    >
+      <IconFolderLock size={16} />
+      <span className="truncate">File Access</span>
+    </a>
+  );
+}
+
+/**
+ * One selectable agent (or the unscoped "All profiles" entry), rendered inside
+ * the page rather than in a host sidebar. See the routeSidebar decision in
+ * ISA.md: on mobile the host swaps the app nav out for a plugin routeSidebar
+ * entirely, which costs the user their menu, so the roster lives here.
+ */
+function AgentChip({
+  href,
+  active,
+  label,
+  detail,
+}: {
+  href: string;
+  active: boolean;
+  label: string;
+  detail: string;
+}) {
+  const nav = useHostNavigation();
+  return (
+    <a
+      {...nav.linkProps(href)}
+      aria-current={active ? "page" : undefined}
+      className={`fam-pick${active ? " fam-pick--on" : ""}`}
+    >
+      <span className="fam-pick-name">{label}</span>
+      <span className="fam-pick-detail">{detail}</span>
+    </a>
+  );
+}
+
+function AgentPicker({ companyId, selected }: { companyId: string; selected: string | null }) {
+  const { data, loading, error } = usePluginData<HermesAgentsResponse>(
+    "hermes-agents",
+    { companyId },
+  );
+
+  const agents: HermesAgentSummary[] = data?.agents ?? [];
+  const hidden = data?.hiddenNonHermes ?? 0;
+
+  return (
+    <>
+      <div className="fam-picker">
+        <AgentChip
+          href={pageHref()}
+          active={selected === null}
+          label="All profiles"
+          detail="configure by profile"
+        />
+        {loading && <p className="fam-sub">Loading agents…</p>}
+        {error && <div className="fam-alert"><IconWarn />{error.message}</div>}
+        {!loading && !error && agents.length === 0 && (
+          <p className="fam-sub">No Hermes-backed agents in this company.</p>
+        )}
+        {agents.map((a) => (
+          <AgentChip
+            key={a.agentId}
+            href={pageHref(a.agentId)}
+            active={selected === a.agentId}
+            label={a.agentName}
+            detail={agentChipDetail(a)}
+          />
+        ))}
+      </div>
+      {!loading && !error && hidden > 0 && (
+        <p className="fam-sub">
+          {hidden} other {hidden === 1 ? "agent does" : "agents do"} not run on Hermes and{" "}
+          {hidden === 1 ? "is" : "are"} not listed — this plugin isolates the Hermes terminal
+          backend, so there is nothing to configure for them.
+        </p>
+      )}
+      {data?.truncated && (
+        <p className="fam-sub">Showing the first page of agents only.</p>
+      )}
+    </>
+  );
+}
+
+/** Sub-label under an agent's name: which profile, and how we know. */
+function agentChipDetail(a: HermesAgentSummary): string {
+  if (!a.profile) return `no profile matches ${a.hermesHome}`;
+  const parts = [a.profile];
+  if (a.isMain) parts.push("router");
+  if (a.declaredMismatch) parts.push(`declared "${a.declaredProfile}"`);
+  return parts.join(" · ");
+}
+
+export function FileAccessRoutePage({ context }: PluginPageProps) {
+  const companyId = context.companyId ?? "";
+  const agentId = useSelectedAgentId();
+
+  if (!companyId) {
+    return <Shell><p className="fam-sub">No active company.</p></Shell>;
+  }
+
+  return (
+    <Shell>
+      <h2 className="fam-h1">File Access</h2>
+      <p className="fam-sub">Pick an agent, or configure Hermes profiles directly.</p>
+      <AgentPicker companyId={companyId} selected={agentId} />
+      {agentId ? (
+        <AgentAccessView companyId={companyId} agentId={agentId} />
+      ) : (
+        <ProfilePicker />
+      )}
+    </Shell>
   );
 }

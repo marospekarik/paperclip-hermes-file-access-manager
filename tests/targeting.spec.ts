@@ -18,14 +18,15 @@ function makeAgent(input: {
   id: string;
   name: string;
   adapterType: string;
-  hermesHome?: string;
+  /** Full adapterConfig, matching the real hermes-paperclip-adapter shape. */
+  adapterConfig?: Record<string, unknown>;
 }): Agent {
   return {
     id: input.id,
     companyId: COMPANY,
     name: input.name,
     adapterType: input.adapterType,
-    adapterConfig: input.hermesHome ? { env: { HERMES_HOME: input.hermesHome } } : {},
+    adapterConfig: input.adapterConfig ?? {},
     urlKey: input.id,
     role: "employee",
     title: null,
@@ -87,22 +88,42 @@ afterEach(async () => {
   for (const t of temps.splice(0)) await fs.rm(t, { recursive: true, force: true });
 });
 
+/**
+ * A `hermes profile alias` wrapper — the shape real agents use to select a
+ * profile (`hermesCommand` points at it; the `-p` lives inside).
+ */
+async function makeWrapper(name: string, profile: string): Promise<string> {
+  const bin = path.join(root, "bin");
+  await fs.mkdir(bin, { recursive: true });
+  const file = path.join(bin, name);
+  await fs.writeFile(file, `#!/bin/sh\nexec /usr/local/bin/hermes -p ${profile} "$@"\n`, {
+    mode: 0o755,
+  });
+  return file;
+}
+
 async function setup() {
   const harness = createTestHarness({ manifest });
   harness.seed({
     agents: [
+      // The real-world shape: profile selected by an alias wrapper, plus the
+      // decorative `profile` field Paperclip writes but the adapter ignores.
       makeAgent({
         id: "agent-coder",
         name: "coder-bot",
         adapterType: "hermes_local",
-        hermesHome: path.join(root, "profiles", "coder"),
+        adapterConfig: {
+          model: "zai/glm-5.1",
+          profile: "coder",
+          hermesCommand: await makeWrapper("coder", "coder"),
+        },
       }),
       makeAgent({ id: "agent-main", name: "router", adapterType: "hermes_local" }),
       makeAgent({
         id: "agent-orphan",
         name: "orphan",
         adapterType: "hermes_local",
-        hermesHome: "/nonexistent/hermes/home",
+        adapterConfig: { env: { HERMES_HOME: "/nonexistent/profiles/ghost" } },
       }),
       makeAgent({ id: "agent-claude", name: "claude", adapterType: "claude_local" }),
     ],
@@ -245,43 +266,67 @@ describe("set-profile-access — configuration persistence", () => {
   });
 });
 
+type AgentProfilePayload = {
+  profile: string | null;
+  isMain: boolean;
+  configurable: boolean;
+  profileSource: string;
+  hermesHome: string;
+  declaredProfile: string | null;
+  declaredMismatch: boolean;
+};
+
+const agentProfile = (h: Awaited<ReturnType<typeof setup>>, agentId: string) =>
+  h.getData<AgentProfilePayload>("agent-profile", { companyId: COMPANY, agentId });
+
 describe("agent-profile resolution", () => {
-  test("maps an agent to its profile by HERMES_HOME", async () => {
+  test("maps an agent to its profile via the hermesCommand wrapper's -p flag", async () => {
     const h = await setup();
-    const res = await h.getData<{ profile: string | null; isMain: boolean }>("agent-profile", {
-      companyId: COMPANY,
-      agentId: "agent-coder",
-    });
+    const res = await agentProfile(h, "agent-coder");
     expect(res.profile).toBe("coder");
     expect(res.isMain).toBe(false);
+    expect(res.profileSource).toBe("hermes-command");
+    expect(res.declaredMismatch).toBe(false);
   });
 
-  test("an agent with no HERMES_HOME resolves to the main profile", async () => {
+  test("an agent with nothing selecting a profile resolves to main", async () => {
     const h = await setup();
-    const res = await h.getData<{ profile: string | null; isMain: boolean }>("agent-profile", {
-      companyId: COMPANY,
-      agentId: "agent-main",
-    });
+    const res = await agentProfile(h, "agent-main");
     expect(res.profile).toBe("main");
     expect(res.isMain).toBe(true);
+    expect(res.profileSource).toBe("default");
   });
 
   test("an agent whose HERMES_HOME matches no profile resolves to null (never main)", async () => {
     const h = await setup();
-    const res = await h.getData<{ profile: string | null }>("agent-profile", {
-      companyId: COMPANY,
-      agentId: "agent-orphan",
-    });
+    const res = await agentProfile(h, "agent-orphan");
     expect(res.profile).toBeNull();
+    expect(res.profileSource).toBe("env");
   });
 
   test("a non-Hermes agent is not configurable", async () => {
     const h = await setup();
-    const res = await h.getData<{ configurable: boolean; profile: string | null }>("agent-profile", {
-      companyId: COMPANY,
-      agentId: "agent-claude",
-    });
+    const res = await agentProfile(h, "agent-claude");
     expect(res.configurable).toBe(false);
     expect(res.profile).toBeNull();
+  });
+});
+
+describe("hermes-agents roster", () => {
+  test("lists only Hermes agents, counts the rest, and resolves each profile", async () => {
+    const h = await setup();
+    const res = await h.getData<{
+      agents: { agentName: string; profile: string | null; profileSource: string }[];
+      hiddenNonHermes: number;
+      truncated: boolean;
+    }>("hermes-agents", { companyId: COMPANY });
+
+    expect(res.agents.map((a) => a.agentName)).toEqual(["coder-bot", "orphan", "router"]);
+    expect(res.agents.find((a) => a.agentName === "coder-bot")!.profile).toBe("coder");
+    expect(res.agents.find((a) => a.agentName === "router")!.profile).toBe("main");
+    expect(res.agents.find((a) => a.agentName === "orphan")!.profile).toBeNull();
+    // The claude_local agent is excluded from the list but reported as hidden.
+    expect(res.hiddenNonHermes).toBe(1);
+    expect(res.truncated).toBe(false);
   });
 });
