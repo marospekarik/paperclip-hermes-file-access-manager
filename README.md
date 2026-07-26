@@ -1,5 +1,10 @@
 # File Access Manager
 
+[![CI](https://github.com/marospekarik/paperclip-hermes-file-access-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/marospekarik/paperclip-hermes-file-access-manager/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+> If your AI agent shouldn't have root to your files, give this a ⭐
+
 ![File Access Manager — mark host paths Read/Write, Read Only, or Denied per Hermes profile; the plugin turns your choices into Docker bind mounts, so the kernel enforces what each agent can read, write, or even see. A denied path simply does not exist inside the container.](.github/media/concept.png)
 
 **Kernel-enforced filesystem sandboxing for your AI agents.** A
