@@ -51,8 +51,8 @@ Prerequisites:
   the container socket, or applying a profile will report `needs attention`.
 
 ```bash
-git clone https://github.com/marospekarik/file-access-manager.git
-cd file-access-manager
+git clone https://github.com/marospekarik/paperclip-hermes-file-access-manager.git
+cd paperclip-hermes-file-access-manager
 bun install && bun run build
 paperclipai plugin install --local "$PWD"
 ```
@@ -155,6 +155,8 @@ recognizes systemd `--user` units and reports `skipped` elsewhere. Found a
 mount bug? Add a case to `tests/integration/regression.test.ts`. Deeper design
 analysis: [`Plans/docker-backend-investigation.md`](./Plans/docker-backend-investigation.md).
 
-## License
+## Built by Ordillect
 
-MIT
+file-access-manager is built by **Ordillect** — agentic infrastructure consulting.
+
+MIT © Ordillect
