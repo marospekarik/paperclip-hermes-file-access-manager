@@ -1,6 +1,6 @@
 # File Access Manager
 
-[![CI](https://github.com/marospekarik/paperclip-hermes-file-access-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/marospekarik/paperclip-hermes-file-access-manager/actions/workflows/ci.yml)
+[![CI](https://github.com/marospekarik/paperclip-hermes-file-access-manager/actions/workflows/integration.yml/badge.svg)](https://github.com/marospekarik/paperclip-hermes-file-access-manager/actions/workflows/integration.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 > If your AI agent shouldn't have root to your files, give this a ⭐
@@ -26,7 +26,7 @@ agent's shell can walk around.
 - **Profile-aware** — discovers your Hermes profiles automatically and writes
   only to the ones you select; the router profile is never touched by accident.
 - **Battle-tested** — a real-Docker integration suite proves every permission
-  mode on Linux and macOS in CI.
+  mode on Linux in CI, and on macOS via the local integration suite.
 
 ## See it work
 

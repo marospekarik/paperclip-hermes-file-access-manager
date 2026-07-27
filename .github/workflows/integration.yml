@@ -3,7 +3,9 @@ name: CI
 # Builds, typechecks, and runs BOTH the unit suite and the mandatory real-Docker
 # integration suite. The integration suite launches actual containers and fails
 # the build if any filesystem permission or volume mount behaves differently
-# than configured. No manual setup — Docker is provisioned per-runner below.
+# than configured. Runs on Linux, whose runners ship Docker preinstalled; macOS
+# is covered by the same suite run locally (GitHub's macOS runners can't provide
+# a working Docker daemon).
 
 on:
   push:
@@ -12,26 +14,13 @@ on:
 
 jobs:
   test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-
-      # Linux runners ship with Docker preinstalled. macOS runners do not, so
-      # install Docker via Colima (a lightweight Docker Desktop alternative).
-      - name: Set up Docker (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install docker colima
-          colima start --cpu 2 --memory 4
-          docker version
 
       - name: Verify Docker is available
         run: docker version
